@@ -7,14 +7,14 @@ umask 077
 # separate explicit confirmation. Pass --yes to skip the prompts after
 # reviewing this script yourself.
 
-PLUGIN_ID="omarchy-google-calendar-clock"
+PLUGIN_ID="io.github.guiestrela.omarchy-google-calendar-clock"
 BUILTIN_ID="omarchy.clock"
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PLUGIN_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/omarchy/plugins/${PLUGIN_ID}"
 DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
 CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
-INSTALL_ROOT="${DATA_HOME}/omarchy-google-calendar-clock"
+INSTALL_ROOT="${DATA_HOME}/io.github.guiestrela.omarchy-google-calendar-clock"
 GOOGLE_CONFIG_DIR="${CONFIG_HOME}/caldir/providers/google"
 CACHE_FILE="${STATE_HOME}/omarchy/calendar-cache.json"
 DEFAULT_CALENDAR_DIR="${DATA_HOME}/caldir"

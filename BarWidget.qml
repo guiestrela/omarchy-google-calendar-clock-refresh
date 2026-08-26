@@ -12,7 +12,7 @@ import "Model.js" as Model
 // middle click opens the timezone picker.
 BarWidget {
   id: root
-  moduleName: "omarchy-google-calendar-clock"
+  moduleName: "io.github.guiestrela.omarchy-google-calendar-clock"
 
   property date displayDate: clock.date
 
@@ -127,7 +127,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "omarchy-google-calendar-clock"
+    target: "io.github.guiestrela.omarchy-google-calendar-clock"
 
     function refresh(): void { root.broadcast("refresh") }
     function cycleFormat(): void { root.cycleFormat() }

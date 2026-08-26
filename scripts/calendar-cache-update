@@ -78,5 +78,5 @@ chmod 600 "$temporary"
 mv -f "$temporary" "$CACHE_FILE"
 
 # If the shell is running, it can swap to the new local data immediately.
-omarchy-shell omarchy-google-calendar-clock refreshCalendar >/dev/null 2>&1 || true
+omarchy-shell io.github.guiestrela.omarchy-google-calendar-clock refreshCalendar >/dev/null 2>&1 || true
 printf 'Cached %s events (%s through %s)\n' "$(jq '.events | length' "$CACHE_FILE")" "$range_start" "$range_end"

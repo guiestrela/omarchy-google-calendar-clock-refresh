@@ -6,9 +6,9 @@ project. It adds personal behavior and interface changes for my Omarchy setup.
 
 Repository: [guiestrela/omarchy-google-calendar-clock-refresh](https://github.com/guiestrela/omarchy-google-calendar-clock-refresh)
 
-> Note: the repository is named `omarchy-google-calendar-clock-refresh`, but
-> the Omarchy plugin ID is `omarchy-google-calendar-clock`. The local plugin
-> path below uses the plugin ID, as defined in `manifest.json`.
+> Note: the repository is named `omarchy-google-calendar-clock-refresh`, while
+> the Omarchy plugin ID is `io.github.guiestrela.omarchy-google-calendar-clock`.
+> The local plugin path below uses the plugin ID, as defined in `manifest.json`.
 
 An Omarchy bar clock with a local-first calendar. It reads standard `.ics`
 files through [Caldir](https://github.com/t4t5/caldir), supports local event
@@ -43,6 +43,11 @@ Add and enable the plugin with Omarchy:
 omarchy plugin add https://github.com/guiestrela/omarchy-google-calendar-clock-refresh --enable
 ```
 
+If an older installation is still present, remove it first with
+`omarchy plugin remove omarchy-google-calendar-clock --yes`, then run the
+installation command above. The renamed plugin uses the ID
+`io.github.guiestrela.omarchy-google-calendar-clock`.
+
 It initially behaves as a plain clock. Click it to open the calendar, then
 select **Direct setup** or **Hosted setup**. The selected flow opens in a
 terminal and guides you through the remaining steps.
@@ -50,8 +55,8 @@ terminal and guides you through the remaining steps.
 You can run the same setup from a terminal:
 
 ```bash
-~/.config/omarchy/plugins/omarchy-google-calendar-clock/setup          # Direct
-~/.config/omarchy/plugins/omarchy-google-calendar-clock/setup --hosted # Hosted
+~/.config/omarchy/plugins/io.github.guiestrela.omarchy-google-calendar-clock/setup          # Direct
+~/.config/omarchy/plugins/io.github.guiestrela.omarchy-google-calendar-clock/setup --hosted # Hosted
 ```
 
 After setup verifies the release, Google connection, and first calendar pull,
@@ -74,8 +79,8 @@ session is reused; it is not recreated on every setup run.
 ### Switch modes later
 
 ```bash
-~/.config/omarchy/plugins/omarchy-google-calendar-clock/scripts/calendar-auth-mode switch hosted
-~/.config/omarchy/plugins/omarchy-google-calendar-clock/scripts/calendar-auth-mode switch direct
+~/.config/omarchy/plugins/io.github.guiestrela.omarchy-google-calendar-clock/scripts/calendar-auth-mode switch hosted
+~/.config/omarchy/plugins/io.github.guiestrela.omarchy-google-calendar-clock/scripts/calendar-auth-mode switch direct
 ```
 
 Switching signs out the current session and starts the chosen sign-in flow.
@@ -83,7 +88,7 @@ Your direct OAuth client ID and secret are kept when switching modes. Check the
 current mode with:
 
 ```bash
-~/.config/omarchy/plugins/omarchy-google-calendar-clock/scripts/calendar-auth-mode status --json
+~/.config/omarchy/plugins/io.github.guiestrela.omarchy-google-calendar-clock/scripts/calendar-auth-mode status --json
 ```
 You can see the chosen mode and switch from the settings panel too.
 
@@ -128,8 +133,8 @@ shell startup, and pulls every 30 minutes. The cache is stored at
 ## Update
 
 ```bash
-omarchy plugin update omarchy-google-calendar-clock
-~/.config/omarchy/plugins/omarchy-google-calendar-clock/setup
+omarchy plugin update io.github.guiestrela.omarchy-google-calendar-clock
+~/.config/omarchy/plugins/io.github.guiestrela.omarchy-google-calendar-clock/setup
 ```
 
 Setup safely replaces the plugin runtime and reuses a valid existing OAuth
@@ -141,7 +146,7 @@ Prefer the plugin’s uninstaller to Omarchy’s Plugins menu
 removal tool:
 
 ```bash
-~/.config/omarchy/plugins/omarchy-google-calendar-clock/uninstall
+~/.config/omarchy/plugins/io.github.guiestrela.omarchy-google-calendar-clock/uninstall
 ```
 
 It removes the plugin, its downloaded Caldir runtime, and its event cache. It

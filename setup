@@ -3,12 +3,12 @@ set -euo pipefail
 umask 077
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-PLUGIN_ID="omarchy-google-calendar-clock"
+PLUGIN_ID="io.github.guiestrela.omarchy-google-calendar-clock"
 BUILTIN_ID="omarchy.clock"
 CALDIR_VERSION="0.12.0"
 DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
 CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
-INSTALL_ROOT="${DATA_HOME}/omarchy-google-calendar-clock"
+INSTALL_ROOT="${DATA_HOME}/io.github.guiestrela.omarchy-google-calendar-clock"
 BIN_DIR="${INSTALL_ROOT}/bin"
 GOOGLE_CONFIG_DIR="${CONFIG_HOME}/caldir/providers/google"
 CALDIR_WRAPPER="${SCRIPT_DIR}/scripts/calendar-caldir"
@@ -116,7 +116,7 @@ else
   RELEASE_BASE="https://github.com/${repository}/releases/download/v${ASSET_PLUGIN_VERSION}"
 fi
 
-WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-google-calendar-clock-setup.XXXXXX")
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/io.github.guiestrela.omarchy-google-calendar-clock-setup.XXXXXX")
 NEW_BIN_DIR="${INSTALL_ROOT}/.bin.new.$$"
 BACKUP_BIN_DIR="${INSTALL_ROOT}/.bin.backup.$$"
 BIN_SWAPPED=false

@@ -19,8 +19,8 @@ import "CalendarModel.js" as CalendarModel
 // anchor against.
 Panel {
   id: root
-  moduleName: "omarchy-google-calendar-clock"
-  ipcTarget: "omarchy-google-calendar-clock"
+  moduleName: "io.github.guiestrela.omarchy-google-calendar-clock"
+  ipcTarget: "io.github.guiestrela.omarchy-google-calendar-clock"
   manageIpc: false
 
   property var anchorItem: null

@@ -11,8 +11,8 @@ fi
 headline=$1
 description="${2:-}"
 
-args=(-g "󰃭" -u normal --app-name "omarchy-google-calendar-clock")
-args+=(--exec "omarchy-shell shell summon omarchy-google-calendar-clock '{}'")
+args=(-g "󰃭" -u normal --app-name "io.github.guiestrela.omarchy-google-calendar-clock")
+args+=(--exec "omarchy-shell shell summon io.github.guiestrela.omarchy-google-calendar-clock '{}'")
 if [[ -n "$description" ]]; then
   omarchy notification send "${args[@]}" "$headline" "$description"
 else
