@@ -134,6 +134,8 @@ Panel {
   property string authMode: "none"
   property string authSession: ""
   property string authStatusError: ""
+  readonly property var eventHours: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23"]
+  readonly property var eventMinutes: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59"]
 
   // While any editable text control holds focus the key catcher stands down:
   // arrow keys keep editing the field (or do nothing at a string boundary)
@@ -402,8 +404,8 @@ Panel {
     Qt.callLater(function() {
       eventTitleField.text = ""
       eventDescriptionField.text = ""
-      eventHourField.text = ""
-      eventMinuteField.text = ""
+      eventHourField.currentIndex = -1
+      eventMinuteField.currentIndex = -1
       eventRepeatCountField.text = ""
       eventTitleField.forceActiveFocus()
     })
@@ -432,8 +434,8 @@ Panel {
       eventTitleField.text = String(event.title || "")
       eventDescriptionField.text = String(event.description || "")
       var timeParts = event.all_day ? [] : String(root.eventTimeLabel(event)).split(":")
-      eventHourField.text = timeParts.length === 2 ? timeParts[0] : ""
-      eventMinuteField.text = timeParts.length === 2 ? timeParts[1] : ""
+      eventHourField.currentIndex = timeParts.length === 2 ? root.eventHours.indexOf(timeParts[0]) : -1
+      eventMinuteField.currentIndex = timeParts.length === 2 ? root.eventMinutes.indexOf(timeParts[1]) : -1
       eventRepeatCountField.text = event.recurring ? recurrenceCountFromRule(root.originalEventRecurrenceRule) : ""
       eventTitleField.forceActiveFocus()
       eventTitleField.selectAll()
@@ -452,10 +454,8 @@ Panel {
   function saveLocalEvent() {
     var title = String(eventTitleField.text || "").trim()
     var description = String(eventDescriptionField.text || "").trim()
-    var hour = String(eventHourField.text || "").trim()
-    var minute = String(eventMinuteField.text || "").trim()
-    if (/^\d$/.test(hour)) hour = "0" + hour
-    if (/^\d$/.test(minute)) minute = "0" + minute
+    var hour = eventHourField.currentIndex >= 0 ? eventHourField.currentText : ""
+    var minute = eventMinuteField.currentIndex >= 0 ? eventMinuteField.currentText : ""
     if (!/\d/.test(hour) && !/\d/.test(minute)) hour = minute = ""
     var time = hour + ":" + minute
     var repeatCount = String(eventRepeatCountField.text || "").trim()
@@ -2281,39 +2281,50 @@ Panel {
                   root.eventAllDayEditing = !root.eventAllDayEditing
                   root.calendarSyncMessage = ""
                   if (root.eventAllDayEditing) {
-                    eventHourField.text = ""
-                    eventMinuteField.text = ""
+                    eventHourField.currentIndex = -1
+                    eventMinuteField.currentIndex = -1
                   } else {
                     Qt.callLater(function() { eventHourField.forceActiveFocus() })
                   }
                 }
               }
 
-              TextField {
+              Controls.ComboBox {
                 id: eventHourField
                 width: Style.space(34)
-                placeholderText: "HH"
-                foreground: root.contentForeground
-                font.family: root.contentFontFamily
+                displayText: currentIndex < 0 ? "HH" : currentText
+                model: root.eventHours
+                editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
                   && !root.eventTitleOnlyEditing
-                inputMask: "00"
-                selectByMouse: false
-                validator: IntValidator { bottom: 0; top: 23 }
-                function normalizeValue() {
-                  var value = String(text || "").trim()
-                  if (/^\d$/.test(value)) text = "0" + value
+                contentItem: Text {
+                  leftPadding: Style.space(5)
+                  text: eventHourField.displayText
+                  color: root.contentForeground
+                  font.family: root.contentFontFamily
+                  verticalAlignment: Text.AlignVCenter
                 }
-                onActiveFocusChanged: {
-                  if (activeFocus) Qt.callLater(selectAll)
-                  else normalizeValue()
+                background: Rectangle {
+                  color: Color.popups.background
+                  border.color: eventHourField.activeFocus ? Color.accent : root.contentForeground
+                  border.width: 1
                 }
-                Keys.onTabPressed: {
-                  normalizeValue()
-                  eventMinuteField.forceActiveFocus()
+                popup: Controls.Popup {
+                  y: eventHourField.height
+                  width: eventHourField.width
+                  padding: 1
+                  contentItem: ListView {
+                    clip: true
+                    model: eventHourField.popup.visible ? eventHourField.delegateModel : null
+                    implicitHeight: Math.min(contentHeight, Style.space(220))
+                  }
                 }
-                Keys.onReturnPressed: root.saveLocalEvent()
-                Keys.onEnterPressed: root.saveLocalEvent()
+                delegate: Controls.ItemDelegate {
+                  width: eventHourField.width
+                  text: modelData
+                  highlighted: eventHourField.highlightedIndex === index
+                }
+                onActivated: eventMinuteField.forceActiveFocus()
                 Keys.onEscapePressed: root.cancelEditingEvent()
               }
 
@@ -2326,24 +2337,40 @@ Panel {
                 font.family: root.contentFontFamily
               }
 
-              TextField {
+              Controls.ComboBox {
                 id: eventMinuteField
                 width: Style.space(34)
-                placeholderText: "MM"
-                foreground: root.contentForeground
-                font.family: root.contentFontFamily
+                displayText: currentIndex < 0 ? "MM" : currentText
+                model: root.eventMinutes
+                editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
                   && !root.eventTitleOnlyEditing
-                inputMask: "00"
-                selectByMouse: false
-                validator: IntValidator { bottom: 0; top: 59 }
-                function normalizeValue() {
-                  var value = String(text || "").trim()
-                  if (/^\d$/.test(value)) text = "0" + value
+                contentItem: Text {
+                  leftPadding: Style.space(5)
+                  text: eventMinuteField.displayText
+                  color: root.contentForeground
+                  font.family: root.contentFontFamily
+                  verticalAlignment: Text.AlignVCenter
                 }
-                onActiveFocusChanged: {
-                  if (activeFocus) Qt.callLater(selectAll)
-                  else normalizeValue()
+                background: Rectangle {
+                  color: Color.popups.background
+                  border.color: eventMinuteField.activeFocus ? Color.accent : root.contentForeground
+                  border.width: 1
+                }
+                popup: Controls.Popup {
+                  y: eventMinuteField.height
+                  width: eventMinuteField.width
+                  padding: 1
+                  contentItem: ListView {
+                    clip: true
+                    model: eventMinuteField.popup.visible ? eventMinuteField.delegateModel : null
+                    implicitHeight: Math.min(contentHeight, Style.space(220))
+                  }
+                }
+                delegate: Controls.ItemDelegate {
+                  width: eventMinuteField.width
+                  text: modelData
+                  highlighted: eventMinuteField.highlightedIndex === index
                 }
                 Keys.onReturnPressed: root.saveLocalEvent()
                 Keys.onEnterPressed: root.saveLocalEvent()
