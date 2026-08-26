@@ -2299,6 +2299,9 @@ Panel {
                 foreground: root.eventAllDayEditing ? Color.accent : root.contentForeground
                 fontFamily: root.contentFontFamily
                 fontSize: Style.font.caption
+                // Keep the all-day/time toggle at the standard square action
+                // size, regardless of the active font metrics.
+                size: Style.space(22)
                 bordered: true
                 focusable: true
                 enabled: !root.calendarCreating && !root.calendarMutating
