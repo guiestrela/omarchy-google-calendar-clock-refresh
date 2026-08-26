@@ -2303,7 +2303,7 @@ Panel {
                 // size, regardless of the active font metrics.
                 size: Style.space(22)
                 width: Style.space(22)
-                height: Style.space(22)
+                height: 22
                 bordered: true
                 focusable: true
                 enabled: !root.calendarCreating && !root.calendarMutating
