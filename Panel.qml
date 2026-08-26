@@ -2302,6 +2302,8 @@ Panel {
                 // Keep the all-day/time toggle at the standard square action
                 // size, regardless of the active font metrics.
                 size: Style.space(22)
+                width: Style.space(22)
+                height: Style.space(22)
                 bordered: true
                 focusable: true
                 enabled: !root.calendarCreating && !root.calendarMutating
