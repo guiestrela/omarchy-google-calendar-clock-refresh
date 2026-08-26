@@ -2311,9 +2311,11 @@ Panel {
                 popup: Controls.Popup {
                   y: eventHourField.height
                   width: eventHourField.width
+                  height: Style.space(240)
                   z: 100
                   focus: true
                   modal: true
+                  closePolicy: Controls.Popup.CloseOnEscape | Controls.Popup.CloseOnPressOutside
                   padding: 1
                   background: Rectangle {
                     color: Color.popups.background
@@ -2322,14 +2324,17 @@ Panel {
                   }
                   contentItem: ListView {
                     clip: true
-                    model: eventHourField.delegateModel
-                    height: Math.min(contentHeight, Style.space(240))
+                    model: root.eventHours
+                    delegate: Controls.ItemDelegate {
+                      width: eventHourField.popup.width - 2
+                      text: modelData
+                      onClicked: {
+                        eventHourField.currentIndex = index
+                        eventHourField.popup.close()
+                        eventMinuteField.forceActiveFocus()
+                      }
+                    }
                   }
-                }
-                delegate: Controls.ItemDelegate {
-                  width: eventHourField.width
-                  text: modelData
-                  highlighted: eventHourField.highlightedIndex === index
                 }
                 onActivated: eventMinuteField.forceActiveFocus()
                 Keys.onEscapePressed: root.cancelEditingEvent()
@@ -2366,9 +2371,11 @@ Panel {
                 popup: Controls.Popup {
                   y: eventMinuteField.height
                   width: eventMinuteField.width
+                  height: Style.space(240)
                   z: 100
                   focus: true
                   modal: true
+                  closePolicy: Controls.Popup.CloseOnEscape | Controls.Popup.CloseOnPressOutside
                   padding: 1
                   background: Rectangle {
                     color: Color.popups.background
@@ -2377,14 +2384,16 @@ Panel {
                   }
                   contentItem: ListView {
                     clip: true
-                    model: eventMinuteField.delegateModel
-                    height: Math.min(contentHeight, Style.space(240))
+                    model: root.eventMinutes
+                    delegate: Controls.ItemDelegate {
+                      width: eventMinuteField.popup.width - 2
+                      text: modelData
+                      onClicked: {
+                        eventMinuteField.currentIndex = index
+                        eventMinuteField.popup.close()
+                      }
+                    }
                   }
-                }
-                delegate: Controls.ItemDelegate {
-                  width: eventMinuteField.width
-                  text: modelData
-                  highlighted: eventMinuteField.highlightedIndex === index
                 }
                 Keys.onReturnPressed: root.saveLocalEvent()
                 Keys.onEnterPressed: root.saveLocalEvent()
