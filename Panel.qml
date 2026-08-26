@@ -2294,6 +2294,22 @@ Panel {
                 // slot. Input always resumes at the first missing digit.
                 inputMask: "00:00"
                 selectByMouse: false
+                property bool normalizingSingleHour: false
+
+                // A one-digit hour should not force the user to type a
+                // leading zero. Once the first hour digit is entered, pad it
+                // and continue directly with the first minute digit (9 ->
+                // 09:__).
+                onTextChanged: {
+                  if (normalizingSingleHour) return
+                  var value = String(text || "")
+                  var match = value.match(/^([0-9])\s*:/)
+                  if (!match) return
+                  normalizingSingleHour = true
+                  text = "0" + match[1] + ":"
+                  cursorPosition = 3
+                  normalizingSingleHour = false
+                }
 
                 function nextEditablePosition() {
                   var value = String(text || "")
