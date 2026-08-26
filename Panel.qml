@@ -455,6 +455,7 @@ Panel {
     var hour = String(eventHourField.text || "").trim()
     var minute = String(eventMinuteField.text || "").trim()
     if (/^\d$/.test(hour)) hour = "0" + hour
+    if (/^\d$/.test(minute)) minute = "0" + minute
     if (!/\d/.test(hour) && !/\d/.test(minute)) hour = minute = ""
     var time = hour + ":" + minute
     var repeatCount = String(eventRepeatCountField.text || "").trim()
@@ -2290,7 +2291,7 @@ Panel {
 
               TextField {
                 id: eventHourField
-                width: Style.space(27)
+                width: Style.space(34)
                 placeholderText: "HH"
                 foreground: root.contentForeground
                 font.family: root.contentFontFamily
@@ -2299,8 +2300,18 @@ Panel {
                 inputMask: "00"
                 selectByMouse: false
                 validator: IntValidator { bottom: 0; top: 23 }
-                onActiveFocusChanged: if (activeFocus) Qt.callLater(selectAll)
-                Keys.onTabPressed: eventMinuteField.forceActiveFocus()
+                function normalizeValue() {
+                  var value = String(text || "").trim()
+                  if (/^\d$/.test(value)) text = "0" + value
+                }
+                onActiveFocusChanged: {
+                  if (activeFocus) Qt.callLater(selectAll)
+                  else normalizeValue()
+                }
+                Keys.onTabPressed: {
+                  normalizeValue()
+                  eventMinuteField.forceActiveFocus()
+                }
                 Keys.onReturnPressed: root.saveLocalEvent()
                 Keys.onEnterPressed: root.saveLocalEvent()
                 Keys.onEscapePressed: root.cancelEditingEvent()
@@ -2317,7 +2328,7 @@ Panel {
 
               TextField {
                 id: eventMinuteField
-                width: Style.space(27)
+                width: Style.space(34)
                 placeholderText: "MM"
                 foreground: root.contentForeground
                 font.family: root.contentFontFamily
@@ -2326,7 +2337,14 @@ Panel {
                 inputMask: "00"
                 selectByMouse: false
                 validator: IntValidator { bottom: 0; top: 59 }
-                onActiveFocusChanged: if (activeFocus) Qt.callLater(selectAll)
+                function normalizeValue() {
+                  var value = String(text || "").trim()
+                  if (/^\d$/.test(value)) text = "0" + value
+                }
+                onActiveFocusChanged: {
+                  if (activeFocus) Qt.callLater(selectAll)
+                  else normalizeValue()
+                }
                 Keys.onReturnPressed: root.saveLocalEvent()
                 Keys.onEnterPressed: root.saveLocalEvent()
                 Keys.onEscapePressed: root.cancelEditingEvent()
