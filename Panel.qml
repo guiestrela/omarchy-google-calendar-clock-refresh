@@ -2301,7 +2301,7 @@ Panel {
                   text: eventHourField.currentIndex < 0 ? "HH" : eventHourField.currentText
                   color: root.contentForeground
                   font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: Style.font.bodySmall
                   verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
@@ -2334,7 +2334,7 @@ Panel {
                         text: eventHourOption.text
                         color: root.contentForeground
                         font.family: root.contentFontFamily
-                        font.pixelSize: Style.font.caption
+                        font.pixelSize: Style.font.bodySmall
                         verticalAlignment: Text.AlignVCenter
                       }
                       background: Rectangle {
@@ -2375,7 +2375,7 @@ Panel {
                   text: eventMinuteField.currentIndex < 0 ? "MM" : eventMinuteField.currentText
                   color: root.contentForeground
                   font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: Style.font.bodySmall
                   verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
@@ -2408,7 +2408,7 @@ Panel {
                         text: eventMinuteOption.text
                         color: root.contentForeground
                         font.family: root.contentFontFamily
-                        font.pixelSize: Style.font.caption
+                        font.pixelSize: Style.font.bodySmall
                         verticalAlignment: Text.AlignVCenter
                       }
                       background: Rectangle {
