@@ -84,6 +84,7 @@ Panel {
   property bool calendarCreating: false
   property bool calendarPushing: false
   property bool calendarPushArmed: false
+  property bool calendarBidirectionalSync: false
   property bool calendarStatusLoading: false
   property string calendarSyncMessage: ""
   property bool calendarCloseAfterSync: false
@@ -851,6 +852,13 @@ Panel {
     pullFromGoogle(true)
   }
 
+  function syncWithGoogle() {
+    if (root.calendarStatusLoading || root.calendarPulling || root.calendarPushing
+        || root.calendarAutoPrefetching || root.calendarScheduledRefreshing) return
+    root.calendarBidirectionalSync = true
+    pullFromGoogle(true)
+  }
+
   function showSyncResult(message) {
     root.calendarSyncMessage = message
     calendarSyncFeedback.restart()
@@ -1078,14 +1086,21 @@ Panel {
       root.calendarPulling = false
       if (exitCode === 0) {
         root.persistSettings({ lastCalendarPull: new Date().toISOString() })
-        root.showSyncResult("Google calendar synchronized successfully")
         root.calendarStatusEntries = []
         root.calendarStatusOutput = ""
-        calendarReloadAfterPull.restart()
+        if (root.calendarBidirectionalSync) {
+          root.calendarBidirectionalSync = false
+          root.pushToGoogle(true)
+        } else {
+          root.showSyncResult("Google calendar synchronized successfully")
+          calendarReloadAfterPull.restart()
+        }
       } else if (exitCode === 127) {
+        root.calendarBidirectionalSync = false
         root.calendarRuntimeMissing = true
         root.calendarSyncMessage = "Caldir runtime is not installed — run setup first"
       } else {
+        root.calendarBidirectionalSync = false
         root.calendarSyncMessage = root.syncErrorMessage(root.calendarPullOutput, "Google pull failed")
       }
     }
@@ -1978,36 +1993,13 @@ Panel {
 
                 PanelActionButton {
                   iconText: "󰑐"
-                  tooltipText: "Synchronize with Google"
+                  tooltipText: "Synchronize with Google (pull and push)"
                   foreground: root.contentForeground
                   fontFamily: root.contentFontFamily
                   enabled: !root.calendarStatusLoading && !root.calendarPulling
                     && !root.calendarPushing && !root.calendarAutoPrefetching
                     && !root.calendarScheduledRefreshing
-                  onClicked: root.checkCalendarStatus()
-                }
-
-                PanelActionButton {
-                  iconText: "↓"
-                  tooltipText: "Pull latest from Google"
-                  foreground: root.contentForeground
-                  fontFamily: root.contentFontFamily
-                  enabled: !root.calendarPulling && !root.calendarAutoPrefetching
-                    && !root.calendarStatusLoading && !root.calendarPushing
-                    && !root.calendarScheduledRefreshing
-                  onClicked: root.pullFromGoogle(true)
-                }
-
-                PanelActionButton {
-                  iconText: "↑"
-                  tooltipText: root.calendarPushArmed
-                    ? "Click again to push local changes to Google"
-                    : "Push local changes to Google (confirmation required)"
-                  foreground: root.calendarPushArmed ? Color.accent : root.contentForeground
-                  fontFamily: root.contentFontFamily
-                  enabled: !root.calendarPushing && !root.calendarPulling
-                    && !root.calendarAutoPrefetching && !root.calendarScheduledRefreshing
-                  onClicked: root.pushToGoogle()
+                  onClicked: root.syncWithGoogle()
                 }
 
               }
