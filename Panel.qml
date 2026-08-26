@@ -2324,6 +2324,7 @@ Panel {
               Controls.ComboBox {
                 id: eventHourField
                 width: Style.space(42)
+                height: 22
                 model: root.eventHours
                 editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
@@ -2398,6 +2399,7 @@ Panel {
               Controls.ComboBox {
                 id: eventMinuteField
                 width: Style.space(42)
+                height: 22
                 model: root.eventMinutes
                 editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
@@ -2464,6 +2466,7 @@ Panel {
                 id: eventPeriodField
                 visible: root.clockUsesAmPm
                 width: Style.space(50)
+                height: 22
                 model: root.eventPeriods
                 editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
