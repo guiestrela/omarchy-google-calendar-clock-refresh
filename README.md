@@ -1,10 +1,14 @@
-# Omarchy Google Calendar and Clock Refresh
+# Omarchy Google Calendar Clock Refresh
 
-This is a personal version based on the original
+This project is maintained by Guiestrela and is based on the original
 [Omarchy Google Calendar and Clock](https://github.com/NachoRodriguezM/omarchy-google-calendar-clock)
-project. The original project and its authors remain credited. This Refresh
-version is maintained by Guiestrela and adds personal behavior and interface
-changes for my Omarchy setup.
+project. It adds personal behavior and interface changes for my Omarchy setup.
+
+Repository: [guiestrela/omarchy-google-calendar-clock-refresh](https://github.com/guiestrela/omarchy-google-calendar-clock-refresh)
+
+> Note: the repository is named `omarchy-google-calendar-clock-refresh`, but
+> the Omarchy plugin ID is `omarchy-google-calendar-clock`. The local plugin
+> path below uses the plugin ID, as defined in `manifest.json`.
 
 An Omarchy bar clock with a local-first calendar. It reads standard `.ics`
 files through [Caldir](https://github.com/t4t5/caldir), supports local event
@@ -36,7 +40,7 @@ checkout before extracting or executing it.
 Add and enable the plugin with Omarchy:
 
 ```bash
-omarchy plugin add https://github.com/NachoRodriguezM/omarchy-google-calendar-clock --enable
+omarchy plugin add https://github.com/guiestrela/omarchy-google-calendar-clock-refresh --enable
 ```
 
 It initially behaves as a plain clock. Click it to open the calendar, then
@@ -149,11 +153,8 @@ local Caldir calendar data. Keeping them allows a later reinstall to reuse
 your calendar state. Pass `--yes` only after reviewing the script: it accepts
 all removal prompts.
 
-Using the removal hook in Omarchy menu removes the plugin directory, but leaves 
-the above mentioned data and does not restore the built-in clock.
-
-In the future if this hook can be pointed to a script, I'll update to have a
-cleaned uninstall experience.
+Using the removal hook in the Omarchy menu removes the plugin directory, but
+leaves the data mentioned above and does not restore the built-in clock.
 
 ## License
 
