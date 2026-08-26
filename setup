@@ -6,10 +6,6 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PLUGIN_ID="omarchy-google-calendar-clock"
 BUILTIN_ID="omarchy.clock"
 CALDIR_VERSION="0.12.0"
-# Until this personal fork publishes its own release assets, use the verified
-# binary package from the original 0.1.7 release. This is intentionally kept
-# separate from the personal plugin version in manifest.json.
-ASSET_PLUGIN_VERSION="0.1.7"
 DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
 CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 INSTALL_ROOT="${DATA_HOME}/omarchy-google-calendar-clock"
@@ -61,6 +57,7 @@ for dependency in curl jq tar sha256sum omarchy; do
   }
 done
 VERSION=$(jq -er '.version' "${SCRIPT_DIR}/manifest.json")
+ASSET_PLUGIN_VERSION="$VERSION"
 
 case "$(uname -m)" in
   x86_64) ASSET_ARCH="x86_64" ;;
@@ -75,9 +72,9 @@ RELEASE_MANIFEST="${SCRIPT_DIR}/release-assets/v${ASSET_PLUGIN_VERSION}.json"
   echo "Refusing to download or execute an unbound Caldir asset." >&2
   exit 1
 }
-EXPECTED_SHA256=$(jq -er --arg asset "$ASSET" '
+EXPECTED_SHA256=$(jq -er --arg asset "$ASSET" --arg version "$ASSET_PLUGIN_VERSION" '
   if .schemaVersion == 1
-    and .pluginVersion == "0.1.7"
+    and .pluginVersion == $version
     and (.pluginSourceCommit | type == "string" and test("^[0-9a-f]{40}$"))
     and (.assets | type == "object")
     and (.assets[$asset] | type == "string" and test("^[0-9a-f]{64}$"))
@@ -93,8 +90,11 @@ if command -v git \
     && source_commit=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null); then
   manifest_source_commit=$(jq -er '.pluginSourceCommit' "$RELEASE_MANIFEST")
   [[ "$manifest_source_commit" == "$source_commit" ]] || {
+    git -C "$SCRIPT_DIR" merge-base --is-ancestor "$manifest_source_commit" "$source_commit" \
+      && git -C "$SCRIPT_DIR" diff --quiet "$manifest_source_commit" "$source_commit" -- . ':(exclude)release-assets' || {
     echo "The release manifest does not match this plugin source checkout." >&2
     exit 1
+    }
   }
 fi
 if [[ -n "${CALENDAR_CLOCK_ASSET_BASE_URL:-}" ]]; then
