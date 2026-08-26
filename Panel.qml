@@ -2291,15 +2291,14 @@ Panel {
 
               Controls.ComboBox {
                 id: eventHourField
-                width: Style.space(34)
-                displayText: currentIndex < 0 ? "HH" : currentText
+                width: Style.space(42)
                 model: root.eventHours
                 editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
                   && !root.eventTitleOnlyEditing
                 contentItem: Text {
                   leftPadding: Style.space(5)
-                  text: eventHourField.displayText
+                  text: eventHourField.currentIndex < 0 ? "HH" : eventHourField.currentText
                   color: root.contentForeground
                   font.family: root.contentFontFamily
                   verticalAlignment: Text.AlignVCenter
@@ -2312,11 +2311,19 @@ Panel {
                 popup: Controls.Popup {
                   y: eventHourField.height
                   width: eventHourField.width
+                  z: 100
+                  focus: true
+                  modal: true
                   padding: 1
+                  background: Rectangle {
+                    color: Color.popups.background
+                    border.color: Color.accent
+                    border.width: 1
+                  }
                   contentItem: ListView {
                     clip: true
-                    model: eventHourField.popup.visible ? eventHourField.delegateModel : null
-                    implicitHeight: Math.min(contentHeight, Style.space(220))
+                    model: eventHourField.delegateModel
+                    height: Math.min(contentHeight, Style.space(240))
                   }
                 }
                 delegate: Controls.ItemDelegate {
@@ -2339,15 +2346,14 @@ Panel {
 
               Controls.ComboBox {
                 id: eventMinuteField
-                width: Style.space(34)
-                displayText: currentIndex < 0 ? "MM" : currentText
+                width: Style.space(42)
                 model: root.eventMinutes
                 editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
                   && !root.eventTitleOnlyEditing
                 contentItem: Text {
                   leftPadding: Style.space(5)
-                  text: eventMinuteField.displayText
+                  text: eventMinuteField.currentIndex < 0 ? "MM" : eventMinuteField.currentText
                   color: root.contentForeground
                   font.family: root.contentFontFamily
                   verticalAlignment: Text.AlignVCenter
@@ -2360,11 +2366,19 @@ Panel {
                 popup: Controls.Popup {
                   y: eventMinuteField.height
                   width: eventMinuteField.width
+                  z: 100
+                  focus: true
+                  modal: true
                   padding: 1
+                  background: Rectangle {
+                    color: Color.popups.background
+                    border.color: Color.accent
+                    border.width: 1
+                  }
                   contentItem: ListView {
                     clip: true
-                    model: eventMinuteField.popup.visible ? eventMinuteField.delegateModel : null
-                    implicitHeight: Math.min(contentHeight, Style.space(220))
+                    model: eventMinuteField.delegateModel
+                    height: Math.min(contentHeight, Style.space(240))
                   }
                 }
                 delegate: Controls.ItemDelegate {
