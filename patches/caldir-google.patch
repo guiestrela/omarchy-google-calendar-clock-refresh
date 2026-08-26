@@ -1,0 +1,299 @@
+diff --git a/caldir-provider-google/src/commands/create_event.rs b/caldir-provider-google/src/commands/create_event.rs
+index 34d9874..67b270f 100644
+--- a/caldir-provider-google/src/commands/create_event.rs
++++ b/caldir-provider-google/src/commands/create_event.rs
+@@ -6,6 +6,7 @@ use google_calendar::types::SendUpdates;
+ 
+ use crate::app_config::AppConfigStore;
+ use crate::commands::invite::patch_invite_status;
++use crate::commands::update_event::patch_event_without_attendees;
+ use crate::constants::{PROVIDER_EVENT_ID_PROPERTY, PROVIDER_NAME};
+ use crate::google_event::{FromGoogle, ToGoogle};
+ use crate::remote_config::GoogleRemoteConfig;
+@@ -59,34 +60,24 @@ pub async fn handle(cmd: CreateEvent) -> Result<Event> {
+ 
+             return Event::from_google(google_event);
+         } else {
+-            let mut google_event = cmd.event.to_google();
+-
+-            google_event.id = instance_id.clone();
+-
+-            // Overrides never carry their own RRULE in Google's model.
+-            google_event.recurrence = Vec::new();
+-
+-            let response = client
+-                .events()
+-                .update(
+-                    calendar_id,
+-                    &instance_id,
+-                    0,
+-                    0,
+-                    false,
+-                    SendUpdates::All,
+-                    false,
+-                    &google_event,
++            // A generated occurrence already exists remotely. PATCH it rather
++            // than replacing the whole Google resource with the smaller ICS
++            // model, which lacks immutable and provider-owned instance fields.
++            let google_event = patch_event_without_attendees(
++                session.access_token(),
++                calendar_id,
++                &instance_id,
++                &cmd.event,
++            )
++            .await
++            .with_context(|| {
++                format!(
++                    "Failed to update recurring instance: {}",
++                    cmd.event.summary.as_deref().unwrap_or("Untitled event")
+                 )
+-                .await
+-                .with_context(|| {
+-                    format!(
+-                        "Failed to update recurring instance: {}",
+-                        google_event.summary
+-                    )
+-                })?;
+-
+-            return Event::from_google(response.body);
++            })?;
++
++            return Event::from_google(google_event);
+         }
+     }
+ 
+diff --git a/caldir-provider-google/src/commands/delete_event.rs b/caldir-provider-google/src/commands/delete_event.rs
+index ee713c7..24b6fa9 100644
+--- a/caldir-provider-google/src/commands/delete_event.rs
++++ b/caldir-provider-google/src/commands/delete_event.rs
+@@ -29,11 +29,19 @@ pub async fn handle(cmd: DeleteEvent) -> Result<()> {
+         .await?;
+     let client = session_store.client(&session, &app_config_store)?;
+ 
+-    client
++    let result = client
+         .events()
+         .delete(calendar_id, google_event_id, false, SendUpdates::All)
+-        .await
+-        .context("Failed to delete event")?;
++        .await;
++
++    match result {
++        Ok(_) => {}
++        // Updating a recurring master with an EXDATE can remove its expanded
++        // override before the local delete diff is applied. Google then
++        // reports 410 Gone; the requested final state is already achieved.
++        Err(error) if error.to_string().contains("Code: 410 Gone") => {}
++        Err(error) => return Err(error).context("Failed to delete event"),
++    }
+ 
+     Ok(())
+ }
+diff --git a/caldir-provider-google/src/commands/update_event.rs b/caldir-provider-google/src/commands/update_event.rs
+index c06986c..7d5f60d 100644
+--- a/caldir-provider-google/src/commands/update_event.rs
++++ b/caldir-provider-google/src/commands/update_event.rs
+@@ -6,7 +6,7 @@ use serde_json::Value;
+ 
+ use crate::app_config::AppConfigStore;
+ use crate::commands::invite::patch_invite_status;
+-use crate::constants::{PROVIDER_EVENT_ID_PROPERTY, PROVIDER_NAME};
++use crate::constants::{PROVIDER_EVENT_ID_PROPERTY, PROVIDER_EVENT_TYPE_PROPERTY, PROVIDER_NAME};
+ use crate::google_event::{FromGoogle, ToGoogle};
+ use crate::remote_config::GoogleRemoteConfig;
+ use crate::session::SessionStore;
+@@ -58,7 +58,7 @@ pub async fn handle(cmd: UpdateEvent) -> Result<Event> {
+     }
+ }
+ 
+-async fn patch_event_without_attendees(
++pub(crate) async fn patch_event_without_attendees(
+     access_token: &str,
+     calendar_id: &str,
+     event_id: &str,
+@@ -91,7 +91,32 @@ fn patch_body_without_attendees(event: &Event) -> Result<Value> {
+     let mut body = serde_json::to_value(event.to_google())?;
+ 
+     if let Value::Object(fields) = &mut body {
++        if event.x_property(PROVIDER_EVENT_TYPE_PROPERTY) == Some("birthday") {
++            let summary = fields
++                .remove("summary")
++                .unwrap_or(Value::String(String::new()));
++            fields.clear();
++            fields.insert("eventType".into(), Value::String("birthday".into()));
++            fields.insert("summary".into(), summary);
++            return Ok(body);
++        }
+         fields.remove("attendees");
++        // Google PATCH recursively merges start/end objects. When an event
++        // changes between all-day (`date`) and timed (`dateTime`), omission of
++        // the old representation does not clear it and Google rejects the
++        // merged object as "Invalid start time". Explicit nulls make the two
++        // representations mutually exclusive in both conversion directions.
++        for field in ["start", "end"] {
++            let Some(Value::Object(datetime)) = fields.get_mut(field) else {
++                continue;
++            };
++            if datetime.contains_key("dateTime") {
++                datetime.insert("date".to_string(), Value::Null);
++            } else if datetime.contains_key("date") {
++                datetime.insert("dateTime".to_string(), Value::Null);
++                datetime.insert("timeZone".to_string(), Value::Null);
++            }
++        }
+     }
+ 
+     Ok(body)
+@@ -100,7 +125,7 @@ fn patch_body_without_attendees(event: &Event) -> Result<Value> {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use caldir_core::{Attendee, EventTime, Recurrence};
++    use caldir_core::{Attendee, EventTime, Recurrence, XProperty};
+     use chrono::NaiveDate;
+ 
+     #[test]
+@@ -122,4 +147,79 @@ mod tests {
+         );
+         assert!(body.get("recurrence").is_some());
+     }
++
++    #[test]
++    fn patch_body_includes_description() {
++        let mut event = Event::new(
++            "Planning session",
++            EventTime::Date(NaiveDate::from_ymd_opt(2027, 2, 3).unwrap()),
++        );
++        event.description = Some("Agenda and preparation notes".into());
++
++        let body = patch_body_without_attendees(&event).unwrap();
++
++        assert_eq!(body["description"], "Agenda and preparation notes");
++    }
++
++    #[test]
++    fn birthday_patch_only_updates_summary() {
++        let mut event = Event::new(
++            "Updated birthday title",
++            EventTime::Date(NaiveDate::from_ymd_opt(2027, 2, 3).unwrap()),
++        );
++        event.description = Some("Google does not allow this".into());
++        event.location = Some("Nor this".into());
++        event
++            .x_properties
++            .push(XProperty::new(PROVIDER_EVENT_TYPE_PROPERTY, "birthday"));
++
++        let body = patch_body_without_attendees(&event).unwrap();
++
++        assert_eq!(
++            body,
++            serde_json::json!({
++                "eventType": "birthday",
++                "summary": "Updated birthday title"
++            })
++        );
++    }
++
++    #[test]
++    fn timed_patch_explicitly_clears_all_day_date() {
++        let mut event = Event::new(
++            "Weekly planning",
++            EventTime::DateTimeZoned {
++                datetime: chrono::NaiveDate::from_ymd_opt(2027, 2, 3)
++                    .unwrap()
++                    .and_hms_opt(9, 0, 0)
++                    .unwrap(),
++                tzid: "Europe/Oslo".into(),
++            },
++        );
++        event.end = Some(EventTime::DateTimeZoned {
++            datetime: chrono::NaiveDate::from_ymd_opt(2027, 2, 3)
++                .unwrap()
++                .and_hms_opt(10, 0, 0)
++                .unwrap(),
++            tzid: "Europe/Oslo".into(),
++        });
++        event.recurrence = Some(Recurrence::new("FREQ=WEEKLY;COUNT=2"));
++        let body = patch_body_without_attendees(&event).unwrap();
++        assert!(body["start"].get("date").is_some_and(Value::is_null));
++        assert!(body["end"].get("date").is_some_and(Value::is_null));
++        assert!(body["start"].get("dateTime").is_some());
++        assert!(body["end"].get("dateTime").is_some());
++    }
++
++    #[test]
++    fn all_day_patch_explicitly_clears_timed_fields() {
++        let event = Event::new(
++            "All day",
++            EventTime::Date(chrono::NaiveDate::from_ymd_opt(2027, 2, 3).unwrap()),
++        );
++        let body = patch_body_without_attendees(&event).unwrap();
++        assert!(body["start"].get("dateTime").is_some_and(Value::is_null));
++        assert!(body["start"].get("timeZone").is_some_and(Value::is_null));
++        assert!(body["start"].get("date").is_some());
++    }
+ }
+diff --git a/caldir-provider-google/src/constants.rs b/caldir-provider-google/src/constants.rs
+index 311e740..23038bc 100644
+--- a/caldir-provider-google/src/constants.rs
++++ b/caldir-provider-google/src/constants.rs
+@@ -1,3 +1,4 @@
+ pub const PROVIDER_NAME: &str = "google";
+ pub const PROVIDER_EVENT_ID_PROPERTY: &str = "X-GOOGLE-EVENT-ID";
+ pub const PROVIDER_COLOR_ID_PROPERTY: &str = "X-GOOGLE-COLOR-ID";
++pub const PROVIDER_EVENT_TYPE_PROPERTY: &str = "X-GOOGLE-EVENT-TYPE";
+diff --git a/caldir-provider-google/src/google_event/from_google.rs b/caldir-provider-google/src/google_event/from_google.rs
+index e410d56..b24be3b 100644
+--- a/caldir-provider-google/src/google_event/from_google.rs
++++ b/caldir-provider-google/src/google_event/from_google.rs
+@@ -4,7 +4,9 @@ use caldir_core::{
+     RecurrenceId, Reminder, Status, Visibility, XProperty,
+ };
+ 
+-use crate::constants::{PROVIDER_COLOR_ID_PROPERTY, PROVIDER_EVENT_ID_PROPERTY};
++use crate::constants::{
++    PROVIDER_COLOR_ID_PROPERTY, PROVIDER_EVENT_ID_PROPERTY, PROVIDER_EVENT_TYPE_PROPERTY,
++};
+ 
+ pub trait FromGoogle {
+     fn from_google(event: google_calendar::types::Event) -> Result<Self>
+@@ -101,6 +103,12 @@ impl FromGoogle for Event {
+         if !event.color_id.is_empty() {
+             x_properties.push(XProperty::new(PROVIDER_COLOR_ID_PROPERTY, event.color_id));
+         }
++        if !event.event_type.is_empty() && event.event_type != "default" {
++            x_properties.push(XProperty::new(
++                PROVIDER_EVENT_TYPE_PROPERTY,
++                event.event_type.clone(),
++            ));
++        }
+ 
+         Ok(Event {
+             uid: EventUid::new(event.i_cal_uid),
+@@ -432,6 +440,26 @@ mod tests {
+         assert_eq!(event.url, None);
+     }
+ 
++    #[test]
++    fn special_event_type_is_preserved_as_provider_metadata() {
++        let mut ge = minimal_event();
++        ge.event_type = "birthday".into();
++
++        let event = Event::from_google(ge).unwrap();
++
++        assert_eq!(event.x_property("X-GOOGLE-EVENT-TYPE"), Some("birthday"));
++    }
++
++    #[test]
++    fn default_event_type_is_not_written_to_ics() {
++        let mut ge = minimal_event();
++        ge.event_type = "default".into();
++
++        let event = Event::from_google(ge).unwrap();
++
++        assert_eq!(event.x_property("X-GOOGLE-EVENT-TYPE"), None);
++    }
++
+     // `useDefault: true` means "inherit the calendar's default reminders". We
+     // deliberately don't expand those into explicit VALARMs locally: round-
+     // tripping back via `to_google` would then send them as overrides and

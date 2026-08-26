@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Bundled helper for Omarchy Google Calendar and Clock.
+set -euo pipefail
+umask 077
+
+# Build the local JSON snapshot consumed by the clock. With --pull it first
+# downloads remote changes; it never calls Caldir push or sync.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CALDIR_BIN="${SCRIPT_DIR}/calendar-caldir"
+EVENTS_BIN="${SCRIPT_DIR}/calendar-events"
+CACHE_DIR="${HOME}/.local/state/omarchy"
+CACHE_FILE="${CACHE_DIR}/calendar-cache.json"
+
+[[ -x "$CALDIR_BIN" && -x "$EVENTS_BIN" ]] || {
+  echo "Caldir calendar tools are not installed" >&2
+  exit 127
+}
+
+pull=false
+if [[ ${1:-} == "--pull" ]]; then
+  pull=true
+  shift
+fi
+
+if (( $# == 0 )); then
+  calendar_year=$(date +%Y)
+  range_start="${calendar_year}-01-01"
+  year_end="${calendar_year}-12-31"
+  future_end=$(date -d "$(date +%Y-%m-01) +7 months -1 day" +%F)
+  if [[ $future_end > $year_end ]]; then range_end=$future_end; else range_end=$year_end; fi
+elif (( $# == 2 )) && [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [[ $2 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  range_start=$1
+  range_end=$2
+else
+  echo "Usage: calendar-cache-update [--pull] [YYYY-MM-DD YYYY-MM-DD]" >&2
+  exit 64
+fi
+
+# A scheduled refresh covers its normal near-term window, but it must not
+# discard months deliberately cached after the user browsed further ahead.
+# Pull only the requested window; the broader snapshot comes from Caldir's
+# already-local store and remains instantaneous for the UI.
+pull_start=$range_start
+pull_end=$range_end
+if [[ -r "$CACHE_FILE" ]]; then
+  cached_start=$(jq -r '.range_start // empty' "$CACHE_FILE" 2>/dev/null || true)
+  cached_end=$(jq -r '.range_end // empty' "$CACHE_FILE" 2>/dev/null || true)
+  if [[ $cached_start =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && $cached_start < $range_start ]]; then
+    range_start=$cached_start
+  fi
+  if [[ $cached_end =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && $cached_end > $range_end ]]; then
+    range_end=$cached_end
+  fi
+fi
+
+if $pull; then
+  "$CALDIR_BIN" pull --from "$pull_start" --to "$pull_end" >/dev/null
+  # Caldir only writes calendar colors at connect time; re-read them from
+  # Google so palette changes reach the clock. Best-effort by design.
+  "${SCRIPT_DIR}/calendar-colors" >/dev/null 2>&1 || true
+fi
+
+snapshot=$("$EVENTS_BIN" "$range_start" "$range_end")
+if ! jq -e '.ok == true and (.events | type == "array")' >/dev/null <<<"$snapshot"; then
+  jq -r '.error // "Could not build calendar cache"' <<<"$snapshot" >&2
+  exit 1
+fi
+
+mkdir -p "$CACHE_DIR"
+temporary=$(mktemp "${CACHE_FILE}.XXXXXX")
+jq -c \
+  --arg generated_at "$(date --iso-8601=seconds)" \
+  --arg range_start "$range_start" \
+  --arg range_end "$range_end" \
+  '. + {generated_at: $generated_at, range_start: $range_start, range_end: $range_end}' \
+  <<<"$snapshot" >"$temporary"
+chmod 600 "$temporary"
+mv -f "$temporary" "$CACHE_FILE"
+
+# If the shell is running, it can swap to the new local data immediately.
+omarchy-shell omarchy-google-calendar-clock refreshCalendar >/dev/null 2>&1 || true
+printf 'Cached %s events (%s through %s)\n' "$(jq '.events | length' "$CACHE_FILE")" "$range_start" "$range_end"

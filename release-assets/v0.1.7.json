@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "pluginVersion": "0.1.7",
+  "pluginSourceCommit": "3df3fe3dba8d0af0de77892a0e35e873ec9ab699",
+  "assets": {
+    "omarchy-google-calendar-clock-caldir-0.1.7-aarch64-linux.tar.gz": "7233e5cccd77490be3c96b5a072346c3a54fa2ed8ad0bc916ffccb6e751634d2",
+    "omarchy-google-calendar-clock-caldir-0.1.7-x86_64-linux.tar.gz": "00aa07736e407b7f180ff857c0d339fe24bd5f58c5bde2d55751d2cca7cd3d79"
+  }
+}

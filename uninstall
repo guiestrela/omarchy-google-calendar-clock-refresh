@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+# Removes Omarchy Google Calendar and Clock and everything its setup script
+# installed. Calendar data and OAuth credentials are never deleted without a
+# separate explicit confirmation. Pass --yes to skip the prompts after
+# reviewing this script yourself.
+
+PLUGIN_ID="omarchy-google-calendar-clock"
+BUILTIN_ID="omarchy.clock"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PLUGIN_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/omarchy/plugins/${PLUGIN_ID}"
+DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
+CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+STATE_HOME="${XDG_STATE_HOME:-${HOME}/.local/state}"
+INSTALL_ROOT="${DATA_HOME}/omarchy-google-calendar-clock"
+GOOGLE_CONFIG_DIR="${CONFIG_HOME}/caldir/providers/google"
+CACHE_FILE="${STATE_HOME}/omarchy/calendar-cache.json"
+DEFAULT_CALENDAR_DIR="${DATA_HOME}/caldir"
+SHELL_CONFIG="${CONFIG_HOME}/omarchy/shell.json"
+
+ASSUME_YES=false
+
+usage() {
+  cat <<'EOF'
+Usage: ./uninstall [--yes]
+
+Removes the plugin, its downloaded Caldir binaries, and its local event
+cache. Deleting Google OAuth credentials and Caldir calendar data always
+requires a separate confirmation.
+EOF
+}
+
+case "${1:-}" in
+  "") ;;
+  --yes|-y) ASSUME_YES=true ;;
+  -h|--help) usage; exit 0 ;;
+  *) usage >&2; exit 64 ;;
+esac
+
+for dependency in omarchy jq; do
+  command -v "$dependency" >/dev/null || {
+    echo "Missing required command: ${dependency}" >&2
+    exit 127
+  }
+done
+
+confirm() {
+  local prompt="$1"
+  if $ASSUME_YES; then return 0; fi
+  if ! [[ -t 0 && -t 1 ]]; then
+    echo "Refusing to continue without confirmation; pass --yes to skip prompts." >&2
+    exit 1
+  fi
+  local answer
+  while true; do
+    read -r -p "$prompt [y/N] " answer
+    case "$answer" in
+      y|Y|yes|YES) return 0 ;;
+      ""|n|N|no|NO) return 1 ;;
+    esac
+  done
+}
+
+restore_clock_center_anchor() {
+  [[ -f "$SHELL_CONFIG" ]] || return 0
+
+  # Only undo the anchor this plugin set. If the user chose another widget as
+  # their anchor after installing us, preserve that preference.
+  local replacement
+  replacement=$(mktemp "${SHELL_CONFIG}.tmp.XXXXXX")
+  if ! jq --arg plugin "$PLUGIN_ID" --arg builtin "$BUILTIN_ID" '
+    if (.bar.centerAnchor // "") == $plugin then
+      .bar.centerAnchor = $builtin
+    else
+      .
+    end
+  ' "$SHELL_CONFIG" > "$replacement"; then
+    rm -f -- "$replacement"
+    echo "Could not restore the bar center anchor." >&2
+    return 1
+  fi
+  chmod --reference="$SHELL_CONFIG" "$replacement"
+  mv -- "$replacement" "$SHELL_CONFIG"
+}
+
+echo "This removes Omarchy Google Calendar and Clock and what its setup installed."
+echo "Caldir calendar files (.ics) and Google OAuth credentials are kept unless"
+echo "you confirm deleting them separately."
+confirm "Remove Omarchy Google Calendar and Clock now?" || {
+  echo "Aborted; nothing was removed."
+  exit 0
+}
+
+calendar_dir=""
+if [[ -x "${SCRIPT_DIR}/scripts/calendar-caldir" ]]; then
+  calendar_dir=$("${SCRIPT_DIR}/scripts/calendar-caldir" config --json 2>/dev/null \
+    | jq -r '.config.calendar_dir // empty' 2>/dev/null || true)
+fi
+if [[ -z "$calendar_dir" && -d "$DEFAULT_CALENDAR_DIR" ]]; then
+  calendar_dir=$DEFAULT_CALENDAR_DIR
+fi
+
+if [[ -e "$INSTALL_ROOT" ]]; then
+  rm -rf -- "$INSTALL_ROOT"
+  echo "Removed downloaded Caldir binaries (${INSTALL_ROOT})."
+fi
+
+if [[ -e "$CACHE_FILE" ]]; then
+  rm -f -- "$CACHE_FILE"
+  echo "Removed the local event cache (${CACHE_FILE})."
+fi
+
+if [[ -d "$GOOGLE_CONFIG_DIR" ]]; then
+  if confirm "Delete Google OAuth credentials in ${GOOGLE_CONFIG_DIR}?"; then
+    rm -rf -- "$GOOGLE_CONFIG_DIR"
+    echo "Deleted Google OAuth credentials."
+  else
+    echo "Kept Google OAuth credentials."
+  fi
+fi
+
+if [[ -n "$calendar_dir" && -d "$calendar_dir" ]]; then
+  calendar_dir=$(realpath -- "$calendar_dir" 2>/dev/null || true)
+  if [[ -z "$calendar_dir" || "$calendar_dir" == "/" || "$calendar_dir" == "$HOME" \
+      || "$calendar_dir" == "$CONFIG_HOME" || "$calendar_dir" == "$DATA_HOME" \
+      || "$calendar_dir" == "$STATE_HOME" ]]; then
+    echo "Refusing to delete an unsafe calendar directory: ${calendar_dir:-unknown}" >&2
+    calendar_dir=""
+  fi
+fi
+
+if [[ -n "$calendar_dir" && -d "$calendar_dir" ]]; then
+  echo "Caldir keeps your calendar files in ${calendar_dir}."
+  if confirm "Delete ALL local calendar data in ${calendar_dir}?"; then
+    rm -rf -- "$calendar_dir"
+    echo "Deleted local calendar data."
+  else
+    echo "Kept local calendar data."
+  fi
+fi
+
+if [[ -d "$PLUGIN_DIR" ]]; then
+  omarchy plugin remove "$PLUGIN_ID" --yes
+fi
+
+omarchy plugin enable "$BUILTIN_ID" --section center --index 0
+omarchy bar move "$BUILTIN_ID" --section center --index 0
+restore_clock_center_anchor
+echo
+echo "Uninstall complete. The built-in ${BUILTIN_ID} widget is enabled at the center of the bar."

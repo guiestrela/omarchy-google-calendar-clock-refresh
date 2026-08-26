@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Bundled helper for Omarchy Google Calendar and Clock.
+set -euo pipefail
+
+# Fires an Omarchy desktop notification for a timed calendar event. Clicking
+# the notification reopens the calendar panel through the shell's exec role.
+if (($# < 1)) || [[ -z "$1" ]]; then
+  echo "Usage: calendar-notify <headline> [description]" >&2
+  exit 64
+fi
+headline=$1
+description="${2:-}"
+
+args=(-g "󰃭" -u normal --app-name "omarchy-google-calendar-clock")
+args+=(--exec "omarchy-shell shell summon omarchy-google-calendar-clock '{}'")
+if [[ -n "$description" ]]; then
+  omarchy notification send "${args[@]}" "$headline" "$description"
+else
+  omarchy notification send "${args[@]}" "$headline"
+fi

@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Bundled helper for Omarchy Google Calendar and Clock.
+set -euo pipefail
+
+# Read-only bridge from Caldir to the Omarchy clock. It intentionally accepts
+# only ISO calendar dates and never invokes Caldir sync/push/create commands.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CALDIR_BIN="${SCRIPT_DIR}/calendar-caldir"
+
+if [[ ! -x "$CALDIR_BIN" ]]; then
+  printf '{"ok":false,"error":"Caldir is not installed"}\n'
+  exit 0
+fi
+
+from_date="${1:-}"
+to_date="${2:-}"
+date_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+
+if [[ ! "$from_date" =~ $date_pattern || ! "$to_date" =~ $date_pattern ]]; then
+  printf '{"ok":false,"error":"Expected ISO dates (YYYY-MM-DD)"}\n'
+  exit 0
+fi
+
+if ! output=$("$CALDIR_BIN" --json events --from "$from_date" --to "$to_date" 2>&1); then
+  jq -Rn --arg error "$output" '{ok:false,error:$error}'
+  exit 0
+fi
+
+# Caldir stores a color alongside each local calendar. Build a small safe map
+# keyed by its directory slug, then attach it to the JSON UI contract.
+calendar_dir=$("$CALDIR_BIN" config --json | jq -r '.config.calendar_dir')
+calendar_dir="${calendar_dir/#\~/$HOME}"
+calendar_meta=$(
+  shopt -s nullglob
+  for config in "$calendar_dir"/*/.caldir/config.toml; do
+    slug=$(basename "$(dirname "$(dirname "$config")")")
+    color=$(awk -F ' = ' '$1 == "color" { gsub(/"/, "", $2); print $2; exit }' "$config")
+    read_only=$(awk -F ' = ' '$1 == "read_only" { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$config")
+    [[ "$slug" =~ ^[A-Za-z0-9._-]+$ && "$color" =~ ^#[0-9A-Fa-f]{6}$ ]] || continue
+    [[ "$read_only" == "true" ]] || read_only=false
+    printf '%s\t%s\t%s\n' "$slug" "$color" "$read_only"
+  done | jq -Rn '[inputs | split("\t") | {key: .[0], value: {color: .[1], read_only: (.[2] == "true")}}] | from_entries'
+)
+
+# Expanded Caldir events deliberately omit the master's RRULE. Attach that
+# compact rule by (calendar, UID) so the editor can show and change a series'
+# schedule without parsing ICS in QML.
+recurrence_meta=$(
+  shopt -s nullglob
+  for calendar_path in "$calendar_dir"/*; do
+    [[ -d "$calendar_path" ]] || continue
+    slug=$(basename "$calendar_path")
+    [[ "$slug" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    for event_file in "$calendar_path"/*.ics; do
+      uid=$(awk -F: '$1 == "UID" { sub(/\r$/, "", $2); print substr($0, 5); exit }' "$event_file" | tr -d '\r')
+      rrule=$(awk -F: '$1 == "RRULE" { print substr($0, 7); exit }' "$event_file" | tr -d '\r')
+      [[ -n "$uid" && -n "$rrule" && "$uid" != *$'\t'* && "$rrule" != *$'\t'* ]] || continue
+      printf '%s\t%s\t%s\n' "$slug" "$uid" "$rrule"
+    done
+  done | jq -Rn '[inputs | split("\t") | {key: (.[0] + "\u001f" + .[1]), value: .[2]}] | from_entries'
+)
+
+# Google puts conference links in the ICS URL and X-GOOGLE-CONFERENCE
+# fields, neither of which Caldir's JSON events carries. Scan the local
+# store so the agenda can offer a JOIN action without editing restrictions.
+conference_meta=$(
+  shopt -s nullglob
+  for calendar_path in "$calendar_dir"/*; do
+    [[ -d "$calendar_path" ]] || continue
+    slug=$(basename "$calendar_path")
+    [[ "$slug" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    for event_file in "$calendar_path"/*.ics; do
+      uid=$(awk -F: '$1 == "UID" { sub(/\r$/, "", $2); print substr($0, 5); exit }' "$event_file" | tr -d '\r')
+      [[ -n "$uid" && "$uid" != *$'\t'* ]] || continue
+      url=$(awk -F: '
+        $1 == "URL" || $1 == "X-GOOGLE-CONFERENCE" {
+          v = substr($0, index($0, ":") + 1)
+          sub(/\r$/, "", v)
+          if ($1 == "X-GOOGLE-CONFERENCE") { conf = v }
+          else if (conf == "") { plain = v }
+        }
+        END { print (conf != "" ? conf : plain) }
+      ' "$event_file" | tr -d '\r')
+      [[ -n "$url" && "$url" != *$'\t'* ]] || continue
+      printf '%s\t%s\t%s\n' "$slug" "$uid" "$url"
+    done
+  done | jq -Rn '[inputs | split("\t") | {key: (.[0] + "\u001f" + .[1]), value: .[2]}] | from_entries'
+)
+
+# Google special event types (birthday, focusTime, outOfOffice, workingLocation)
+# have provider-specific editing restrictions. Preserve that metadata in the
+# UI contract so the clock does not offer edits Google will reject.
+event_type_meta=$(
+  shopt -s nullglob
+  for calendar_path in "$calendar_dir"/*; do
+    [[ -d "$calendar_path" ]] || continue
+    slug=$(basename "$calendar_path")
+    [[ "$slug" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    for event_file in "$calendar_path"/*.ics; do
+      uid=$(awk -F: '$1 == "UID" { sub(/\r$/, "", $2); print substr($0, 5); exit }' "$event_file" | tr -d '\r')
+      event_type=$(awk -F: '$1 == "X-GOOGLE-EVENT-TYPE" { print substr($0, 21); exit }' "$event_file" | tr -d '\r')
+      [[ -n "$uid" && -n "$event_type" && "$uid" != *$'\t'* && "$event_type" != *$'\t'* ]] || continue
+      printf '%s\t%s\t%s\n' "$slug" "$uid" "$event_type"
+    done
+  done | jq -Rn '[inputs | split("\t") | {key: (.[0] + "\u001f" + .[1]), value: .[2]}] | from_entries'
+)
+
+jq -c --argjson calendar_meta "$calendar_meta" --argjson recurrence_meta "$recurrence_meta" \
+  --argjson event_type_meta "$event_type_meta" --argjson conference_meta "$conference_meta" \
+  '{ok:true,events:[.[] | . + {
+    calendar_color: ($calendar_meta[.calendar].color // null),
+    calendar_read_only: (if $calendar_meta[.calendar].read_only == null then true else $calendar_meta[.calendar].read_only end),
+    recurrence_rule: ($recurrence_meta[(.calendar + "\u001f" + .uid)] // null),
+    provider_event_type: ($event_type_meta[(.calendar + "\u001f" + .uid)] // null),
+    conference_url: ($conference_meta[(.calendar + "\u001f" + .uid)] // null),
+    event_title_only: (($event_type_meta[(.calendar + "\u001f" + .uid)] // "default") == "birthday"),
+    event_read_only: ((($event_type_meta[(.calendar + "\u001f" + .uid)] // "default") != "default")
+      and (($event_type_meta[(.calendar + "\u001f" + .uid)] // "default") != "birthday"))
+  }]}' <<<"$output"

@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Create a local Caldir event, optionally with a simple recurrence rule."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def fail(message: str, code: int = 64) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def escape_text(value: str) -> str:
+    value = value.replace("\r\n", "\n").replace("\r", "\n")
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace(";", "\\;").replace(",", "\\,")
+
+
+def atomic_add_metadata(path: Path, rrule: str, description: str) -> None:
+    lines = path.read_text(encoding="utf-8").replace("\r\n", "\n").splitlines()
+    if rrule and any(line.upper().startswith("RRULE:") for line in lines):
+        fail("The new event unexpectedly already has a recurrence rule", 1)
+    insert_at = next((index for index, line in enumerate(lines) if line.upper() == "END:VEVENT"), len(lines))
+    metadata = []
+    if rrule:
+        metadata.append("RRULE:" + rrule)
+    if description:
+        metadata.append("DESCRIPTION:" + escape_text(description))
+    lines[insert_at:insert_at] = metadata
+    payload = ("\r\n".join(lines) + "\r\n").encode("utf-8")
+    descriptor, temporary = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, path.stat().st_mode & 0o777)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def main() -> None:
+    if len(sys.argv) != 7:
+        fail("Usage: calendar-create TITLE YYYY-MM-DD [HH:MM] none|daily|weekly|monthly|yearly [COUNT] [DESCRIPTION]")
+
+    title, date, time_text, repeat, count_text, description = sys.argv[1:]
+    title = title.strip()
+    description = description.strip()
+    if not title or "\r" in title or "\n" in title:
+        fail("Event title cannot be empty or contain a newline")
+    if "\0" in description or len(description) > 10000:
+        fail("Event description is too long or contains an invalid character")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        fail("Date must be YYYY-MM-DD")
+    if time_text and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", time_text):
+        fail("Time must be HH:MM")
+    frequencies = {
+        "none": "",
+        "daily": "DAILY",
+        "weekly": "WEEKLY",
+        "monthly": "MONTHLY",
+        "yearly": "YEARLY",
+    }
+    if repeat not in frequencies:
+        fail("Repeat must be none, daily, weekly, monthly, or yearly")
+    if count_text:
+        if repeat == "none" or not count_text.isdigit() or not 2 <= int(count_text) <= 999:
+            fail("Repeat count must be between 2 and 999")
+
+    caldir = SCRIPT_DIR / "calendar-caldir"
+    cache_updater = SCRIPT_DIR / "calendar-cache-update"
+    if not os.access(caldir, os.X_OK) or not cache_updater.is_file():
+        fail("Calendar tools are not installed", 127)
+
+    try:
+        config_result = subprocess.run(
+            [str(caldir), "config", "--json"], check=True, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        config = json.loads(config_result.stdout)["config"]
+        calendar_root = Path(config["calendar_dir"]).expanduser().resolve()
+        calendar_path = (calendar_root / config["default_calendar"]).resolve()
+    except (OSError, subprocess.CalledProcessError, KeyError, json.JSONDecodeError) as error:
+        fail("Could not read the default Caldir calendar", 1)
+
+    files_before = {path.resolve() for path in calendar_path.glob("*.ics")}
+    command = [str(caldir), "new", title, "--start", date + ("T" + time_text if time_text else "")]
+    if time_text:
+        command += ["--duration", "1h"]
+    environment = os.environ.copy()
+    environment["NO_COLOR"] = "1"
+    try:
+        result = subprocess.run(
+            command, check=True, text=True, env=environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as error:
+        fail((error.stderr or error.stdout or "Could not create the local event").strip(), 1)
+
+    created_files = [path.resolve() for path in calendar_path.glob("*.ics") if path.resolve() not in files_before]
+    if len(created_files) != 1:
+        fail("Could not identify the newly-created local event file", 1)
+    created_path = created_files[0]
+
+    rrule = ""
+    if repeat != "none":
+        rrule = "FREQ=" + frequencies[repeat]
+        if count_text:
+            rrule += ";COUNT=" + count_text
+    if rrule or description:
+        try:
+            atomic_add_metadata(created_path, rrule, description)
+        except (OSError, UnicodeError) as error:
+            fail("Event was created, but its calendar details could not be saved", 1)
+
+    cache = subprocess.run([str(cache_updater)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if cache.returncode != 0:
+        fail(cache.stderr.strip() or "Event was created, but the calendar cache could not refresh", 1)
+    kind = "recurring event" if repeat != "none" else "event"
+    print(f"Saved local {kind}: {title}")
+
+
+if __name__ == "__main__":
+    main()

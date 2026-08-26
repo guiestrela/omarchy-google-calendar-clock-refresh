@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Bundled helper for Omarchy Google Calendar and Clock.
+set -euo pipefail
+
+# Explicitly pull-only: this command downloads Google changes into Caldir's
+# local ICS store and never calls push or sync. --pending uses Caldir's own
+# default window, exactly like `caldir status`; targeted calls remain available
+# for fetching distant months while browsing.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+UPDATER_BIN="${SCRIPT_DIR}/calendar-cache-update"
+CALDIR_BIN="${SCRIPT_DIR}/calendar-caldir"
+[[ -x "$UPDATER_BIN" && -x "$CALDIR_BIN" ]] || { echo "Calendar pull tools are not installed" >&2; exit 127; }
+
+pending=false
+if [[ ${1:-} == "--pending" ]]; then
+  pending=true
+  shift
+fi
+
+if (( $# != 0 && $# != 2 )); then
+  echo "Usage: calendar-pull [--pending] [YYYY-MM-DD YYYY-MM-DD]" >&2
+  exit 64
+fi
+if (( $# == 2 )) && { [[ ! $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [[ ! $2 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; }; then
+  echo "Usage: calendar-pull [--pending] [YYYY-MM-DD YYYY-MM-DD]" >&2
+  exit 64
+fi
+
+if $pending; then
+  # No bounds is deliberate: status is also unbounded at the CLI level and
+  # Caldir applies the same safe rolling default window to both commands.
+  "$CALDIR_BIN" pull >/dev/null
+  # A displayed range can sit beyond that rolling window. Fetch it too, then
+  # rebuild the snapshot, so manual sync remains useful while browsing years
+  # ahead without allowing status and pull to disagree.
+  if (( $# == 2 )); then exec "$UPDATER_BIN" --pull "$1" "$2"; fi
+  exec "$UPDATER_BIN"
+fi
+
+(( $# == 2 )) || { echo "Targeted pull requires a date range" >&2; exit 64; }
+exec "$UPDATER_BIN" --pull "$1" "$2"

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Bundled helper for Omarchy Google Calendar and Clock.
+set -euo pipefail
+
+CACHE_FILE="${HOME}/.local/state/omarchy/calendar-cache.json"
+if [[ ! -r "$CACHE_FILE" ]]; then
+  printf '{"ok":false,"error":"Calendar cache is not ready yet"}\n'
+  exit 0
+fi
+
+jq -c 'if .ok == true and (.events | type == "array") then . else {ok:false,error:"Calendar cache is invalid"} end' "$CACHE_FILE"

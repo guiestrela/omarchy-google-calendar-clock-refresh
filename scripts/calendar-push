@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Bundled helper for Omarchy Google Calendar and Clock.
+set -euo pipefail
+export NO_COLOR=1
+
+# Intentionally outbound-only. This is never called by timers, cache refresh,
+# or the automatic prefetch path; the UI passes --confirm after a second click.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CALDIR_BIN="${SCRIPT_DIR}/calendar-caldir"
+MUTATE_BIN="${SCRIPT_DIR}/calendar-mutate"
+CACHE_BIN="${SCRIPT_DIR}/calendar-cache-update"
+
+if [[ ${1:-} != "--confirm" || $# != 1 ]]; then
+  echo "Refusing to push without an explicit --confirm" >&2
+  exit 64
+fi
+[[ -x "$CALDIR_BIN" && -x "$MUTATE_BIN" && -x "$CACHE_BIN" ]] || { echo "Caldir calendar tools are not installed" >&2; exit 127; }
+
+# Existing recurring overrides need the provider event ID stored on their
+# master. For a newly-created series that ID only exists after the first push,
+# so recover from that specific ordering failure by propagating it and retrying.
+"$MUTATE_BIN" repair-provider-ids >/dev/null
+set +e
+output=$("$CALDIR_BIN" push 2>&1)
+exit_code=$?
+set -e
+printf '%s\n' "$output"
+
+if [[ $output == *'"reason": "eventTypeRestriction"'* ]]; then
+  echo "Google does not allow editing this special event type (for example, a birthday event)." >&2
+fi
+
+if [[ $output == *"Cannot create recurring instance override without master's"* ]]; then
+  "$MUTATE_BIN" repair-provider-ids >/dev/null
+  set +e
+  output=$("$CALDIR_BIN" push 2>&1)
+  exit_code=$?
+  set -e
+  printf '%s\n' "$output"
+fi
+
+# Caldir currently reports per-calendar/provider failures as text while its
+# top-level command still exits successfully. Do not let the shell UI turn
+# those failures into a false "Pushed" banner.
+if (( exit_code == 0 )) && [[ $output =~ (Remote\ error:|Provider\ error:|Provider\ returned\ error:|Error\ handling\ request:|Failed\ to) ]]; then
+  exit 1
+fi
+
+if (( exit_code == 0 )); then
+  if ! cache_output=$("$CACHE_BIN" 2>&1); then
+    echo "Google push succeeded, but the local calendar cache could not refresh: $cache_output" >&2
+    exit 1
+  fi
+  printf '%s\n' "$cache_output"
+fi
+
+exit "$exit_code"

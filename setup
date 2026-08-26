@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PLUGIN_ID="omarchy-google-calendar-clock"
+BUILTIN_ID="omarchy.clock"
+CALDIR_VERSION="0.12.0"
+# Until this personal fork publishes its own release assets, use the verified
+# binary package from the original 0.1.7 release. This is intentionally kept
+# separate from the personal plugin version in manifest.json.
+ASSET_PLUGIN_VERSION="0.1.7"
+DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
+CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+INSTALL_ROOT="${DATA_HOME}/omarchy-google-calendar-clock"
+BIN_DIR="${INSTALL_ROOT}/bin"
+GOOGLE_CONFIG_DIR="${CONFIG_HOME}/caldir/providers/google"
+CALDIR_WRAPPER="${SCRIPT_DIR}/scripts/calendar-caldir"
+SHELL_CONFIG="${CONFIG_HOME}/omarchy/shell.json"
+BINARIES_ONLY=false
+HOSTED_OAUTH=false
+
+usage() {
+  cat <<'EOF'
+Usage: ./setup [--binaries-only] [--hosted]
+
+Downloads verified Omarchy Google Calendar and Clock Caldir binaries and,
+unless --binaries-only is used, guides you through Google OAuth setup.
+
+Options:
+  --binaries-only   Install the Caldir binaries and stop; do not connect
+  --hosted          Use caldir.org's hosted Google OAuth relay instead of
+                    your own Google Cloud OAuth client
+
+Auth modes:
+  default (direct)  You create a Desktop OAuth client in your own Google
+                    Cloud project. Authentication and every token refresh
+                    happen directly between this machine and Google;
+                    caldir.org is never involved.
+  --hosted          caldir.org relays Google's OAuth dance with its own
+                    client. No Google Cloud project needed, but every
+                    token refresh depends on caldir.org being reachable,
+                    and your OAuth tokens pass through their servers.
+EOF
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --binaries-only) BINARIES_ONLY=true ;;
+    --hosted) HOSTED_OAUTH=true ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 64 ;;
+  esac
+  shift
+done
+
+for dependency in curl jq tar sha256sum omarchy; do
+  command -v "$dependency" >/dev/null || {
+    echo "Missing required Omarchy tool: ${dependency}" >&2
+    exit 127
+  }
+done
+VERSION=$(jq -er '.version' "${SCRIPT_DIR}/manifest.json")
+
+case "$(uname -m)" in
+  x86_64) ASSET_ARCH="x86_64" ;;
+  aarch64|arm64) ASSET_ARCH="aarch64" ;;
+  *) echo "Omarchy Google Calendar and Clock does not publish Caldir binaries for $(uname -m)" >&2; exit 1 ;;
+esac
+
+ASSET="omarchy-google-calendar-clock-caldir-${ASSET_PLUGIN_VERSION}-${ASSET_ARCH}-linux.tar.gz"
+RELEASE_MANIFEST="${SCRIPT_DIR}/release-assets/v${ASSET_PLUGIN_VERSION}.json"
+[[ -f "$RELEASE_MANIFEST" ]] || {
+  echo "No committed release manifest exists for binary asset version ${ASSET_PLUGIN_VERSION}." >&2
+  echo "Refusing to download or execute an unbound Caldir asset." >&2
+  exit 1
+}
+EXPECTED_SHA256=$(jq -er --arg asset "$ASSET" '
+  if .schemaVersion == 1
+    and .pluginVersion == "0.1.7"
+    and (.pluginSourceCommit | type == "string" and test("^[0-9a-f]{40}$"))
+    and (.assets | type == "object")
+    and (.assets[$asset] | type == "string" and test("^[0-9a-f]{64}$"))
+  then .assets[$asset]
+  else empty
+  end
+' "$RELEASE_MANIFEST") || {
+  echo "The committed release manifest has no valid digest for ${ASSET}." >&2
+  exit 1
+}
+if command -v git \
+    && [[ -z "$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]] \
+    && source_commit=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null); then
+  manifest_source_commit=$(jq -er '.pluginSourceCommit' "$RELEASE_MANIFEST")
+  [[ "$manifest_source_commit" == "$source_commit" ]] || {
+    echo "The release manifest does not match this plugin source checkout." >&2
+    exit 1
+  }
+fi
+if [[ -n "${CALENDAR_CLOCK_ASSET_BASE_URL:-}" ]]; then
+  RELEASE_BASE=${CALENDAR_CLOCK_ASSET_BASE_URL%/}
+else
+  repository=${CALENDAR_CLOCK_RELEASE_REPOSITORY:-}
+  if [[ -z "$repository" ]] && command -v git >/dev/null && git -C "$SCRIPT_DIR" remote get-url origin >/dev/null 2>&1; then
+    origin=$(git -C "$SCRIPT_DIR" remote get-url origin)
+    repository=${origin#https://github.com/}
+    repository=${repository#git@github.com:}
+    repository=${repository%/}
+    repository=${repository%.git}
+  fi
+  [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+    echo "Could not determine the GitHub release repository." >&2
+    echo "Set CALENDAR_CLOCK_RELEASE_REPOSITORY=owner/repository and retry." >&2
+    exit 1
+  }
+  RELEASE_BASE="https://github.com/${repository}/releases/download/v${ASSET_PLUGIN_VERSION}"
+fi
+
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-google-calendar-clock-setup.XXXXXX")
+NEW_BIN_DIR="${INSTALL_ROOT}/.bin.new.$$"
+BACKUP_BIN_DIR="${INSTALL_ROOT}/.bin.backup.$$"
+BIN_SWAPPED=false
+OLD_BIN_MOVED=false
+GOOGLE_CONFIG_EXISTED=false
+OAUTH_COMPLETE=false
+
+[[ -e "$GOOGLE_CONFIG_DIR" ]] && GOOGLE_CONFIG_EXISTED=true
+
+rollback() {
+  status=$?
+  if (( status != 0 )) && ! $OAUTH_COMPLETE; then
+    if $BIN_SWAPPED; then rm -rf -- "$BIN_DIR"; fi
+    if $OLD_BIN_MOVED && [[ -e "$BACKUP_BIN_DIR" ]]; then mv -- "$BACKUP_BIN_DIR" "$BIN_DIR"; fi
+    if ! $GOOGLE_CONFIG_EXISTED && [[ -e "$GOOGLE_CONFIG_DIR" ]]; then
+      rm -rf -- "$GOOGLE_CONFIG_DIR"
+    fi
+  fi
+  rm -rf -- "$NEW_BIN_DIR" "$WORK_DIR"
+  if (( status == 0 )) || $OAUTH_COMPLETE; then rm -rf -- "$BACKUP_BIN_DIR"; fi
+  exit "$status"
+}
+trap rollback EXIT
+
+activate_plugin() {
+  omarchy plugin disable "$BUILTIN_ID"
+  if ! omarchy plugin enable "$PLUGIN_ID" --section center --index 0; then
+    omarchy plugin enable "$BUILTIN_ID" --section center --index 0 || true
+    return 1
+  fi
+
+  # The center section is only fixed at the screen midpoint when its configured
+  # anchor is present. This setup flow replaces the stock clock, so make the
+  # calendar clock that anchor after its widget has been enabled.
+  local replacement
+  replacement=$(mktemp "${SHELL_CONFIG}.tmp.XXXXXX")
+  if ! jq --arg plugin "$PLUGIN_ID" '.bar.centerAnchor = $plugin' "$SHELL_CONFIG" > "$replacement"; then
+    rm -f -- "$replacement"
+    echo "Could not set the calendar clock as the bar center anchor." >&2
+    return 1
+  fi
+  chmod --reference="$SHELL_CONFIG" "$replacement"
+  mv -- "$replacement" "$SHELL_CONFIG"
+  omarchy-shell shell reloadConfig >/dev/null 2>&1 || true
+}
+
+echo "Downloading Omarchy Google Calendar and Clock's patched Caldir ${VERSION} for ${ASSET_ARCH}..."
+curl --fail --location --silent --show-error "${RELEASE_BASE}/${ASSET}" --output "${WORK_DIR}/${ASSET}"
+printf '%s  %s\n' "$EXPECTED_SHA256" "$ASSET" | (
+  cd "$WORK_DIR"
+  sha256sum --check --status -
+)
+
+expected_entries=$'BUILD-INFO\nCALDIR-LICENSE\ncaldir\ncaldir-provider-google'
+archive_entries=$(tar -tzf "${WORK_DIR}/${ASSET}" | sed 's#^\./##' | LC_ALL=C sort)
+[[ "$archive_entries" == "$expected_entries" ]] || {
+  echo "The downloaded archive contains unexpected files; refusing to install it." >&2
+  exit 1
+}
+
+tar -xzf "${WORK_DIR}/${ASSET}" -C "$WORK_DIR"
+[[ -x "${WORK_DIR}/caldir" && -x "${WORK_DIR}/caldir-provider-google" ]] || {
+  echo "The downloaded Caldir executables are invalid." >&2
+  exit 1
+}
+[[ "$("${WORK_DIR}/caldir" --version)" == "caldir-cli ${CALDIR_VERSION}" ]] || {
+  echo "The downloaded Caldir version does not match the plugin." >&2
+  exit 1
+}
+
+mkdir -p "$INSTALL_ROOT" "$NEW_BIN_DIR"
+install -m 0755 "${WORK_DIR}/caldir" "${NEW_BIN_DIR}/caldir"
+install -m 0755 "${WORK_DIR}/caldir-provider-google" "${NEW_BIN_DIR}/caldir-provider-google"
+install -m 0644 "${WORK_DIR}/CALDIR-LICENSE" "${NEW_BIN_DIR}/CALDIR-LICENSE"
+install -m 0644 "${WORK_DIR}/BUILD-INFO" "${NEW_BIN_DIR}/BUILD-INFO"
+
+[[ ! -e "$BACKUP_BIN_DIR" ]] || { echo "A stale setup backup exists; retry later." >&2; exit 1; }
+if [[ -e "$BIN_DIR" ]]; then
+  mv -- "$BIN_DIR" "$BACKUP_BIN_DIR"
+  OLD_BIN_MOVED=true
+fi
+mv -- "$NEW_BIN_DIR" "$BIN_DIR"
+BIN_SWAPPED=true
+
+if $BINARIES_ONLY; then
+  OAUTH_COMPLETE=true
+  echo "Installed verified Caldir binaries in ${BIN_DIR}."
+  exit 0
+fi
+
+session_dir="${GOOGLE_CONFIG_DIR}/session"
+has_session=false
+if [[ -d "$session_dir" ]] && find "$session_dir" -maxdepth 1 -type f -name '*.toml' -print -quit | grep -q .; then
+  has_session=true
+fi
+
+if $has_session; then
+  echo "An existing Google OAuth session was found; it will be reused."
+else
+  if $HOSTED_OAUTH; then
+    cat <<'EOF'
+
+You chose hosted Google OAuth: caldir.org relays the sign-in with its own
+Google Cloud client, so you do not need to create OAuth credentials.
+
+Trade-off: every access-token refresh goes through caldir.org. If that
+service is unreachable or retired, existing sessions stop syncing. Your
+OAuth tokens also pass through caldir.org's servers during each refresh.
+If you prefer direct authentication with Google, rerun setup without
+--hosted.
+
+EOF
+    "$CALDIR_WRAPPER" connect google
+  else
+    cat <<'EOF'
+
+You chose direct Google OAuth: authentication happens directly between this
+machine and Google, and caldir.org is never involved. Setup will now open in
+your browser and wait for completion. Choose or create a Google Cloud
+project, enable the Google Calendar API, create a Desktop OAuth client, and
+enter its client ID and secret when asked.
+
+Trade-off: you must create your own OAuth client in Google Cloud. In return,
+no third-party service is needed now or later — token refreshes also go
+straight to Google. For an easier setup that skips the Google Cloud project
+(but routes sign-in and refreshes through caldir.org), rerun setup with
+--hosted.
+
+EOF
+    "$CALDIR_WRAPPER" connect google --hosted=false
+  fi
+fi
+
+config_json=$("$CALDIR_WRAPPER" config --json)
+calendar_dir=$(jq -er '.config.calendar_dir' <<<"$config_json")
+# Caldir may serialize paths relative to HOME using a leading `~/`. Expand it
+# before filesystem checks; quoting the value directly would test a literal
+# directory named `~` and reject an otherwise valid existing installation.
+calendar_dir="${calendar_dir/#\~/$HOME}"
+[[ -d "$calendar_dir" ]] || {
+  echo "OAuth completed, but Caldir did not create its calendar directory." >&2
+  exit 75
+}
+google_calendar_found=false
+shopt -s nullglob
+for calendar_config in "$calendar_dir"/*/.caldir/config.toml; do
+  if grep -Eq '^provider[[:space:]]*=[[:space:]]*"google"' "$calendar_config"; then
+    google_calendar_found=true
+    break
+  fi
+done
+if ! $google_calendar_found; then
+  echo "OAuth completed, but no Google calendar was selected." >&2
+  exit 75
+fi
+OAUTH_COMPLETE=true
+
+echo "Validating Google access with an initial pull..."
+if ! "$CALDIR_WRAPPER" pull >/dev/null; then
+  echo "Google authorization was saved, but the first pull failed." >&2
+  echo "Your setup was preserved; rerun ./setup to retry validation." >&2
+  exit 75
+fi
+"${SCRIPT_DIR}/scripts/calendar-cache-update"
+activate_plugin
+
+echo
+echo "Omarchy Google Calendar and Clock setup is complete and centered on the bar."

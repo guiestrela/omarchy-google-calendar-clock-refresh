@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Prefer the verified release binaries installed by Omarchy Google Calendar
+# and Clock. Keeping them outside the plugin checkout means plugin updates
+# remain fast and clean.
+DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
+BUNDLED_BIN_DIR="${DATA_HOME}/omarchy-google-calendar-clock/bin"
+
+if [[ -x "${BUNDLED_BIN_DIR}/caldir" ]]; then
+  export PATH="${BUNDLED_BIN_DIR}:${PATH:-}"
+  exec "${BUNDLED_BIN_DIR}/caldir" "$@"
+fi
+
+echo "Omarchy Google Calendar and Clock's Caldir runtime is not installed. Run the plugin setup command." >&2
+exit 127

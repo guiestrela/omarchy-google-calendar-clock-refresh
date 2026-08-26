@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "omarchy-google-calendar-clock",
+  "name": "Omarchy Google Calendar and Clock Refresh",
+  "version": "0.2.0",
+  "author": "Guiestrela",
+  "description": "An Omarchy clock with a local-first calendar and Google sync",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omarchy Google Calendar and Clock Refresh",
+    "description": "Clock and local-first calendar with optional Google sync",
+    "category": "Time",
+    "allowMultiple": false,
+    "defaultSection": "center"
+  }
+}

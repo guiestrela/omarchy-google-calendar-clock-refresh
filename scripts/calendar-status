@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Bundled helper for Omarchy Google Calendar and Clock.
+set -euo pipefail
+
+# Read-only status preview; it does not apply either incoming or outgoing work.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CALDIR_BIN="${SCRIPT_DIR}/calendar-caldir"
+[[ -x "$CALDIR_BIN" ]] || { echo "Caldir is not installed" >&2; exit 127; }
+# Caldir colors terminal text; strip those ANSI sequences so the QML popup
+# receives plain, readable status text.
+"$CALDIR_BIN" status | sed $'s/\033\\[[0-9;]*m//g'

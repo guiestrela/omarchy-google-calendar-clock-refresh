@@ -1,0 +1,582 @@
+#!/usr/bin/env python3
+"""Safely edit or remove local Caldir events without contacting a provider."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+class CalendarError(Exception):
+    pass
+
+
+def fail(message: str, code: int = 1) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def caldir_config() -> dict:
+    binary = SCRIPT_DIR / "calendar-caldir"
+    if not os.access(binary, os.X_OK):
+        raise CalendarError("Caldir is not installed")
+    try:
+        result = subprocess.run(
+            [str(binary), "config", "--json"], check=True, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        return json.loads(result.stdout)["config"]
+    except (OSError, subprocess.CalledProcessError, KeyError, json.JSONDecodeError) as error:
+        raise CalendarError("Could not read the Caldir configuration") from error
+
+
+def unfold(lines: list[str]) -> list[str]:
+    result: list[str] = []
+    for line in lines:
+        if line.startswith((" ", "\t")) and result:
+            result[-1] += line[1:]
+        else:
+            result.append(line)
+    return result
+
+
+def read_lines(path: Path) -> list[str]:
+    return unfold(path.read_text(encoding="utf-8").replace("\r\n", "\n").splitlines())
+
+
+def property_name(line: str) -> str:
+    return line.split(":", 1)[0].split(";", 1)[0].upper()
+
+
+def property_line(lines: list[str], name: str) -> str | None:
+    name = name.upper()
+    return next((line for line in lines if property_name(line) == name), None)
+
+
+def property_value(lines: list[str], name: str) -> str | None:
+    line = property_line(lines, name)
+    return line.split(":", 1)[1] if line and ":" in line else None
+
+
+def set_property(lines: list[str], name: str, value: str, parameters: str = "") -> None:
+    replacement = name + parameters + ":" + value
+    indexes = [i for i, line in enumerate(lines) if property_name(line) == name]
+    if indexes:
+        lines[indexes[0]] = replacement
+        for index in reversed(indexes[1:]):
+            del lines[index]
+        return
+    end = next((i for i, line in enumerate(lines) if line.upper() == "END:VEVENT"), len(lines))
+    lines.insert(end, replacement)
+
+
+def remove_properties(lines: list[str], names: set[str]) -> list[str]:
+    return [line for line in lines if property_name(line) not in names]
+
+
+def escape_text(value: str) -> str:
+    value = value.replace("\r\n", "\n").replace("\r", "\n")
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace(";", "\\;").replace(",", "\\,")
+
+
+def set_optional_text(lines: list[str], name: str, value: str) -> None:
+    if value:
+        set_property(lines, name, escape_text(value))
+    else:
+        lines[:] = remove_properties(lines, {name})
+
+
+def atomic_write(path: Path, lines: list[str]) -> None:
+    payload = ("\r\n".join(lines) + "\r\n").encode("utf-8")
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    descriptor, temporary = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def backup(path: Path, backup_root: Path) -> None:
+    if not path.exists():
+        return
+    backup_root.mkdir(parents=True, exist_ok=True)
+    target = backup_root / path.name
+    counter = 2
+    while target.exists():
+        target = backup_root / f"{path.stem}-{counter}{path.suffix}"
+        counter += 1
+    shutil.copy2(path, target)
+
+
+def calendar_is_read_only(calendar_path: Path) -> bool:
+    config = calendar_path / ".caldir/config.toml"
+    if not config.is_file():
+        raise CalendarError("This calendar has no local Caldir configuration")
+    match = re.search(r"(?m)^read_only\s*=\s*(true|false)\s*$", config.read_text(encoding="utf-8"))
+    return not match or match.group(1) == "true"
+
+
+def matching_files(calendar_path: Path, uid: str) -> list[tuple[Path, list[str]]]:
+    matches: list[tuple[Path, list[str]]] = []
+    for path in calendar_path.glob("*.ics"):
+        try:
+            lines = read_lines(path)
+        except (OSError, UnicodeError):
+            continue
+        if property_value(lines, "UID") == uid:
+            matches.append((path, lines))
+    return matches
+
+
+def recurrence_property(instance_id: str, uid: str) -> tuple[str, str]:
+    prefix = uid + "__"
+    if not instance_id.startswith(prefix):
+        raise CalendarError("The selected occurrence has no usable recurrence identity")
+    token = instance_id[len(prefix):]
+    if ":" in token:
+        head, value = token.rsplit(":", 1)
+        parameters = ";" + head if "=" in head else ""
+    else:
+        # Caldir emits compact recurrence identities for DATE values (and can
+        # do the same for UTC/floating datetimes), with no parameter prefix.
+        value = token
+        parameters = ";VALUE=DATE" if re.fullmatch(r"\d{8}", value) else ""
+    if not re.fullmatch(r"\d{8}(T\d{6}Z?)?", value):
+        raise CalendarError("The selected occurrence date is malformed")
+    return parameters, value
+
+
+def same_recurrence(line: str | None, parameters: str, value: str) -> bool:
+    if not line or ":" not in line:
+        return False
+    return line.split(":", 1)[1] == value and line.split(":", 1)[0].upper() == ("RECURRENCE-ID" + parameters).upper()
+
+
+def find_master_and_override(matches: list[tuple[Path, list[str]]], parameters: str, value: str):
+    master = None
+    override = None
+    for item in matches:
+        recurrence = property_line(item[1], "RECURRENCE-ID")
+        if recurrence is None:
+            if master is None or property_line(item[1], "RRULE") is not None:
+                master = item
+        elif same_recurrence(recurrence, parameters, value):
+            override = item
+    if master is None:
+        raise CalendarError("Could not find the local series master")
+    return master, override
+
+
+def iso_datetime(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise CalendarError("The selected event has an invalid date") from error
+
+
+def new_clock_fields(start_iso: str, end_iso: str, all_day: bool, time_text: str):
+    start = iso_datetime(start_iso)
+    end = iso_datetime(end_iso)
+    duration = end - start
+    source_all_day = "T" not in start_iso
+    if all_day:
+        duration = timedelta(days=max(1, (end.date() - start.date()).days))
+    elif source_all_day or duration <= timedelta(0):
+        duration = timedelta(hours=1)
+    if all_day:
+        new_start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", time_text):
+            raise CalendarError("Time must use HH:MM")
+        hour, minute = map(int, time_text.split(":"))
+        new_start = start.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return new_start, new_start + duration
+
+
+def format_event_value(moment: datetime, all_day: bool) -> str:
+    return moment.strftime("%Y%m%d" if all_day else "%Y%m%dT%H%M%S")
+
+
+def datetime_parameters(line: str | None, all_day: bool, tzid: str) -> str:
+    if all_day:
+        return ";VALUE=DATE"
+    if line and ":" in line:
+        head = line.split(":", 1)[0]
+        if ";" in head:
+            parameters = [
+                parameter for parameter in head.split(";")[1:]
+                if parameter.upper() != "VALUE=DATE"
+            ]
+            if parameters:
+                return ";" + ";".join(parameters)
+    return ";TZID=" + tzid if tzid else ""
+
+
+def system_tzid() -> str:
+    try:
+        zone = Path("/etc/localtime").resolve()
+        marker = "/zoneinfo/"
+        if marker in str(zone):
+            return str(zone).split(marker, 1)[1]
+    except OSError:
+        pass
+    return ""
+
+
+def parse_event_datetime(value: str) -> tuple[datetime, bool]:
+    zulu = value.endswith("Z")
+    raw = value[:-1] if zulu else value
+    try:
+        return datetime.strptime(raw, "%Y%m%dT%H%M%S"), zulu
+    except ValueError as error:
+        raise CalendarError("This series uses a time format the clock cannot edit safely") from error
+
+
+def recurrence_parameters(head: str, all_day: bool, tzid: str) -> str:
+    if all_day:
+        return ";VALUE=DATE"
+    parameters = [
+        parameter for parameter in head.split(";")[1:]
+        if parameter.upper() != "VALUE=DATE"
+    ]
+    if parameters:
+        return ";" + ";".join(parameters)
+    return ";TZID=" + tzid if tzid else ""
+
+
+def touch_revision(lines: list[str]) -> None:
+    now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    sequence = property_value(lines, "SEQUENCE")
+    try:
+        next_sequence = int(sequence or "0") + 1
+    except ValueError:
+        next_sequence = 1
+    set_property(lines, "DTSTAMP", now)
+    set_property(lines, "LAST-MODIFIED", now)
+    set_property(lines, "SEQUENCE", str(next_sequence))
+
+
+def normalize_recurrence_identity(value: str, all_day: bool, clock: str) -> str:
+    if all_day:
+        return value[:8] if re.fullmatch(r"\d{8}(?:T\d{6}Z?)?", value) else value
+    match = re.fullmatch(r"(\d{8})(?:T\d{6})?(Z?)", value)
+    return match.group(1) + "T" + clock + match.group(2) if match else value
+
+
+def edit_series(master_path: Path, lines: list[str], matches: list[tuple[Path, list[str]]],
+                title: str, description: str, time_text: str, all_day: bool, recurrence_rule: str,
+                backup_root: Path) -> None:
+    backup(master_path, backup_root)
+    set_property(lines, "SUMMARY", escape_text(title))
+    set_optional_text(lines, "DESCRIPTION", description)
+    start_line = property_line(lines, "DTSTART")
+    end_line = property_line(lines, "DTEND")
+    start_value = property_value(lines, "DTSTART") or ""
+    end_value = property_value(lines, "DTEND") or ""
+    source_all_day = bool(re.fullmatch(r"\d{8}", start_value))
+    recurrence_clock = ""
+    recurrence_tzid = system_tzid()
+    if all_day:
+        if source_all_day:
+            try:
+                start_date = datetime.strptime(start_value, "%Y%m%d")
+                end_date = datetime.strptime(end_value, "%Y%m%d")
+            except ValueError as error:
+                raise CalendarError("This series uses a date format the clock cannot edit safely") from error
+            days = max(1, (end_date - start_date).days)
+        else:
+            old_start, _start_zulu = parse_event_datetime(start_value)
+            start_date = old_start.replace(hour=0, minute=0, second=0, microsecond=0)
+            days = 1
+        set_property(lines, "DTSTART", start_date.strftime("%Y%m%d"), ";VALUE=DATE")
+        set_property(lines, "DTEND", (start_date + timedelta(days=days)).strftime("%Y%m%d"), ";VALUE=DATE")
+    else:
+        if not time_text or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", time_text):
+            raise CalendarError("Time must use HH:MM")
+        if source_all_day:
+            try:
+                old_start = datetime.strptime(start_value, "%Y%m%d")
+            except ValueError as error:
+                raise CalendarError("This series uses a date format the clock cannot edit safely") from error
+            duration = timedelta(hours=1)
+            start_zulu = False
+        else:
+            old_start, start_zulu = parse_event_datetime(start_value)
+            old_end, _end_zulu = parse_event_datetime(end_value)
+            duration = old_end - old_start
+            if duration <= timedelta(0):
+                duration = timedelta(hours=1)
+        hour, minute = map(int, time_text.split(":"))
+        new_start = old_start.replace(hour=hour, minute=minute, second=0)
+        new_end = new_start + duration
+        recurrence_clock = new_start.strftime("%H%M%S")
+        suffix = "Z" if start_zulu else ""
+        if source_all_day:
+            recurrence_tzid = system_tzid()
+        elif start_zulu:
+            recurrence_tzid = ""
+        elif start_line and "TZID=" in start_line:
+            recurrence_tzid = start_line.split("TZID=", 1)[1].split(";", 1)[0].split(":", 1)[0]
+        date_parameters = "" if start_zulu else datetime_parameters(start_line, False, recurrence_tzid)
+        set_property(lines, "DTSTART", new_start.strftime("%Y%m%dT%H%M%S") + suffix, date_parameters)
+        end_parameters = "" if start_zulu else datetime_parameters(end_line, False, recurrence_tzid)
+        set_property(lines, "DTEND", new_end.strftime("%Y%m%dT%H%M%S") + suffix, end_parameters)
+
+    # EXDATE and RECURRENCE-ID identify instances by the series' original
+    # scheduled date/time. Migrate both their values and VALUE/TZID parameters
+    # when the series moves or changes between all-day and timed.
+    for index, line in enumerate(lines):
+        if property_name(line) != "EXDATE" or ":" not in line:
+            continue
+        head, values = line.split(":", 1)
+        parameters = recurrence_parameters(head, all_day, recurrence_tzid)
+        lines[index] = "EXDATE" + parameters + ":" + ",".join(
+            normalize_recurrence_identity(value, all_day, recurrence_clock) for value in values.split(",")
+        )
+    if recurrence_rule != "keep":
+        if not re.fullmatch(r"FREQ=(?:DAILY|WEEKLY|MONTHLY|YEARLY)(?:;COUNT=(?:[2-9]|[1-9]\d{1,2}))?", recurrence_rule):
+            raise CalendarError("The recurrence schedule is invalid")
+        set_property(lines, "RRULE", recurrence_rule)
+    touch_revision(lines)
+    atomic_write(master_path, lines)
+
+    if source_all_day != all_day or recurrence_clock:
+        for override_path, override_lines in matches:
+            if override_path == master_path:
+                continue
+            recurrence_line = property_line(override_lines, "RECURRENCE-ID")
+            if not recurrence_line or ":" not in recurrence_line:
+                continue
+            head, value = recurrence_line.split(":", 1)
+            normalized = normalize_recurrence_identity(value, all_day, recurrence_clock)
+            parameters = recurrence_parameters(head, all_day, recurrence_tzid)
+            new_line = "RECURRENCE-ID" + parameters + ":" + normalized
+            if new_line == recurrence_line:
+                continue
+            backup(override_path, backup_root)
+            set_property(override_lines, "RECURRENCE-ID", normalized, parameters)
+            touch_revision(override_lines)
+            atomic_write(override_path, override_lines)
+
+
+def edit_instance(master: tuple[Path, list[str]], override, parameters: str, recurrence_value: str,
+                  title: str, description: str, start_iso: str, end_iso: str, all_day: bool, time_text: str,
+                  tzid: str, calendar_path: Path, backup_root: Path) -> None:
+    new_start, new_end = new_clock_fields(start_iso, end_iso, all_day, time_text)
+    if override:
+        path, lines = override
+        backup(path, backup_root)
+    else:
+        master_lines = master[1]
+        lines = remove_properties(master_lines.copy(), {
+            "RRULE", "RDATE", "EXRULE", "EXDATE", "RECURRENCE-ID", "DTSTART", "DTEND",
+            "DURATION", "SUMMARY", "DTSTAMP", "LAST-MODIFIED", "SEQUENCE",
+        })
+        start_marker = new_start.strftime("%Y-%m-%dT%H%M")
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:48] or "event"
+        path = calendar_path / f"{start_marker}__{slug}__override.ics"
+        counter = 2
+        while path.exists():
+            path = calendar_path / f"{start_marker}__{slug}__override-{counter}.ics"
+            counter += 1
+    set_property(lines, "RECURRENCE-ID", recurrence_value, parameters)
+    set_property(lines, "SUMMARY", escape_text(title))
+    set_optional_text(lines, "DESCRIPTION", description)
+    date_params = datetime_parameters(None, all_day, tzid)
+    set_property(lines, "DTSTART", format_event_value(new_start, all_day), date_params)
+    set_property(lines, "DTEND", format_event_value(new_end, all_day), date_params)
+    touch_revision(lines)
+    atomic_write(path, lines)
+
+
+def delete_instance(master: tuple[Path, list[str]], override, parameters: str, recurrence_value: str,
+                    backup_root: Path) -> None:
+    master_path, lines = master
+    backup(master_path, backup_root)
+    if override:
+        backup(override[0], backup_root)
+        override[0].unlink()
+    exdate_head = "EXDATE" + parameters
+    duplicate = any(
+        line.split(":", 1)[0].upper() == exdate_head.upper()
+        and recurrence_value in line.split(":", 1)[1].split(",")
+        for line in lines if ":" in line
+    )
+    if not duplicate:
+        end = next((i for i, line in enumerate(lines) if line.upper() == "END:VEVENT"), len(lines))
+        lines.insert(end, exdate_head + ":" + recurrence_value)
+    touch_revision(lines)
+    atomic_write(master_path, lines)
+
+
+def refresh_cache() -> None:
+    updater = SCRIPT_DIR / "calendar-cache-update"
+    result = subprocess.run([str(updater)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        raise CalendarError(result.stderr.strip() or "The event changed, but the calendar cache could not refresh")
+
+
+def repair_provider_ids() -> int:
+    config = caldir_config()
+    calendar_root = Path(config["calendar_dir"]).expanduser().resolve()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup_root = Path.home() / ".local/state/omarchy/calendar-backups" / stamp
+    repaired = 0
+
+    for calendar_path in calendar_root.iterdir():
+        if not calendar_path.is_dir() or calendar_is_read_only(calendar_path):
+            continue
+        groups: dict[str, list[tuple[Path, list[str]]]] = {}
+        for path in calendar_path.glob("*.ics"):
+            try:
+                lines = read_lines(path)
+            except (OSError, UnicodeError):
+                continue
+            uid = property_value(lines, "UID")
+            if uid:
+                groups.setdefault(uid, []).append((path, lines))
+
+        for matches in groups.values():
+            masters = [item for item in matches if property_line(item[1], "RECURRENCE-ID") is None]
+            if not masters:
+                continue
+            master = next((item for item in masters if property_line(item[1], "RRULE") is not None), masters[0])
+            provider_ids = [
+                line for line in master[1]
+                if re.fullmatch(r"X-[A-Z0-9-]+-EVENT-ID", property_name(line))
+            ]
+            if not provider_ids:
+                continue
+            try:
+                master_sequence = int(property_value(master[1], "SEQUENCE") or "0")
+            except ValueError:
+                master_sequence = 0
+            for override_path, override_lines in matches:
+                if property_line(override_lines, "RECURRENCE-ID") is None:
+                    continue
+                changed = False
+                for provider_line in provider_ids:
+                    name = property_name(provider_line)
+                    value = provider_line.split(":", 1)[1]
+                    # Before its first push an override needs the master's ID
+                    # so the provider can address the synthetic instance. Once
+                    # Google returns the canonical override, it has its own
+                    # instance-specific ID and that value must never be replaced.
+                    if property_value(override_lines, name) is None:
+                        set_property(override_lines, name, value)
+                        changed = True
+                try:
+                    override_sequence = int(property_value(override_lines, "SEQUENCE") or "0")
+                except ValueError:
+                    override_sequence = 0
+                if override_sequence < master_sequence:
+                    set_property(override_lines, "SEQUENCE", str(master_sequence))
+                    changed = True
+                if changed:
+                    backup(override_path, backup_root)
+                    atomic_write(override_path, override_lines)
+                    repaired += 1
+    return repaired
+
+
+def main() -> None:
+    if len(sys.argv) < 2 or sys.argv[1] not in {"edit", "delete", "repair-provider-ids"}:
+        fail("Usage: calendar-mutate edit|delete ...", 64)
+    action = sys.argv[1]
+    if action == "repair-provider-ids":
+        if len(sys.argv) != 2:
+            fail("Usage: calendar-mutate repair-provider-ids", 64)
+        try:
+            repaired = repair_provider_ids()
+            print(f"Repaired provider metadata on {repaired} recurring override file(s)")
+            return
+        except CalendarError as error:
+            fail(str(error))
+    if action == "edit" and len(sys.argv) != 13:
+        fail("Usage: calendar-mutate edit instance|series CALENDAR UID INSTANCE_ID START END true|false TITLE HH:MM RRULE|keep DESCRIPTION", 64)
+    if action == "delete" and (len(sys.argv) != 7 or sys.argv[6] != "--confirm"):
+        fail("Usage: calendar-mutate delete instance|series CALENDAR UID INSTANCE_ID --confirm", 64)
+
+    scope, calendar, uid, instance_id = sys.argv[2:6]
+    if scope not in {"instance", "series"} or not re.fullmatch(r"[A-Za-z0-9._-]+", calendar):
+        fail("Invalid calendar mutation request", 64)
+    if not uid or "\n" in uid or "\r" in uid:
+        fail("Invalid event identity", 64)
+
+    try:
+        config = caldir_config()
+        calendar_root = Path(config["calendar_dir"]).expanduser().resolve()
+        calendar_path = (calendar_root / calendar).resolve()
+        if calendar_path.parent != calendar_root or not calendar_path.is_dir():
+            raise CalendarError("The selected calendar does not exist")
+        if calendar_is_read_only(calendar_path):
+            raise CalendarError("This calendar is read-only")
+        matches = matching_files(calendar_path, uid)
+        if not matches:
+            raise CalendarError("Could not find the selected event in the local calendar")
+
+        parameters = recurrence_value = ""
+        if scope == "instance":
+            parameters, recurrence_value = recurrence_property(instance_id, uid)
+        master, override = find_master_and_override(matches, parameters, recurrence_value)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup_root = Path.home() / ".local/state/omarchy/calendar-backups" / stamp
+
+        if action == "delete":
+            if scope == "series":
+                for path, _lines in matches:
+                    backup(path, backup_root)
+                    path.unlink()
+            else:
+                delete_instance(master, override, parameters, recurrence_value, backup_root)
+        else:
+            start_iso, end_iso, all_day_text, title, time_text, recurrence_rule, description = sys.argv[6:13]
+            title = title.strip()
+            description = description.strip()
+            if not title or "\r" in title or "\n" in title:
+                raise CalendarError("Event title cannot be empty or contain a newline")
+            if "\0" in description or len(description) > 10000:
+                raise CalendarError("Event description is too long or contains an invalid character")
+            all_day = all_day_text == "true"
+            if all_day_text not in {"true", "false"}:
+                raise CalendarError("Invalid all-day value")
+            if scope == "series":
+                edit_series(master[0], master[1], matches, title, description, time_text, all_day,
+                            recurrence_rule, backup_root)
+            else:
+                if recurrence_rule != "keep":
+                    raise CalendarError("An individual event cannot change the series schedule")
+                recurrence_tzid = parameters.split("TZID=", 1)[1] if "TZID=" in parameters else ""
+                if not all_day and not recurrence_tzid:
+                    recurrence_tzid = system_tzid()
+                edit_instance(master, override, parameters, recurrence_value, title, description, start_iso, end_iso,
+                              all_day, time_text, recurrence_tzid,
+                              calendar_path, backup_root)
+
+        refresh_cache()
+        recurring = property_line(master[1], "RRULE") is not None
+        label = "the event" if not recurring else ("the whole series" if scope == "series" else "this event")
+        verb = "Deleted" if action == "delete" else "Updated"
+        print(f"{verb} {label} locally")
+    except CalendarError as error:
+        fail(str(error))
+
+
+if __name__ == "__main__":
+    main()

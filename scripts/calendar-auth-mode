@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# Bundled helper for Omarchy Google Calendar and Clock.
+set -euo pipefail
+umask 077
+
+# Switches between the two Google OAuth modes Caldir supports:
+#   direct   - your own Google Cloud OAuth client (app_config.toml); every
+#              token refresh goes straight to Google.
+#   hosted   - caldir.org's relay with its own client; no Google Cloud
+#              project needed, but sign-in and every refresh pass through
+#              caldir.org.
+#
+# A session is bound to the mode that created it, so switching signs the
+# current session out and re-runs the interactive connect flow. The local
+# OAuth client (app_config.toml) is parked aside when leaving direct mode
+# and restored when coming back, so credentials never have to be re-entered.
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CALDIR_BIN="${SCRIPT_DIR}/calendar-caldir"
+CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
+GOOGLE_CONFIG_DIR="${CONFIG_HOME}/caldir/providers/google"
+SESSION_DIR="${GOOGLE_CONFIG_DIR}/session"
+APP_CONFIG="${GOOGLE_CONFIG_DIR}/app_config.toml"
+APP_CONFIG_PARKED="${GOOGLE_CONFIG_DIR}/app_config.toml.direct"
+ASSUME_YES=false
+
+usage() {
+  cat <<'EOF'
+Usage: calendar-auth-mode status [--json]
+       calendar-auth-mode switch hosted|direct [--yes]
+
+status   Print the current OAuth mode (direct, hosted, or none) and the
+         account email of the active session.
+switch   Sign out of the current session and re-authenticate in the chosen
+         mode. Leaves calendar data and the local cache untouched. In direct
+         mode your stored OAuth client is kept and reused; in hosted mode it
+         is parked and restored if you switch back.
+EOF
+}
+
+fail() {
+  echo "calendar-auth-mode: $*" >&2
+  exit 1
+}
+
+confirm() {
+  local prompt="$1"
+  if $ASSUME_YES; then return 0; fi
+  if ! [[ -t 0 && -t 1 ]]; then
+    echo "Refusing to continue without confirmation; pass --yes to skip prompts." >&2
+    exit 1
+  fi
+  local answer
+  while true; do
+    read -r -p "$prompt [y/N] " answer
+    case "$answer" in
+      y|Y|yes|YES) return 0 ;;
+      ""|n|N|no|NO) return 1 ;;
+    esac
+  done
+}
+
+# toml_value <file> <key>: print the quoted value of a TOML key.
+toml_value() {
+  awk -F' = ' -v key="$2" '$1 == key { gsub(/^"|"$/, "", $2); print $2; exit }' "$1"
+}
+
+current_session_file() {
+  shopt -s nullglob
+  local files=("$SESSION_DIR"/*.toml)
+  if (( ${#files[@]} > 0 )); then printf '%s' "${files[0]}"; fi
+}
+
+current_mode() {
+  local session_file
+  session_file=$(current_session_file) || true
+  if [[ -z "$session_file" ]]; then
+    printf 'none'
+    return 0
+  fi
+  local auth_mode
+  auth_mode=$(toml_value "$session_file" auth_mode)
+  if [[ "$auth_mode" == "hosted" ]]; then printf 'hosted'; else printf 'direct'; fi
+}
+
+cmd_status() {
+  local json=false
+  [[ ${1:-} == "--json" ]] && json=true
+
+  local session_file mode email
+  session_file=$(current_session_file) || true
+  mode=$(current_mode)
+  if [[ -n "$session_file" ]]; then
+    email=$(basename "$session_file" .toml)
+  else
+    email=""
+  fi
+  local app_config=false
+  [[ -f "$APP_CONFIG" ]] && app_config=true
+
+  if $json; then
+    jq -n --arg mode "$mode" --arg email "$email" --argjson app_config "$app_config" \
+      '{mode: $mode, session: $email, app_config: $app_config}'
+  else
+    printf 'Mode: %s\n' "$mode"
+    if [[ -n "$email" ]]; then printf 'Session: %s\n' "$email"; fi
+    printf 'OAuth client stored locally: %s\n' "$( $app_config && echo yes || echo no )"
+  fi
+}
+
+cmd_switch() {
+  local target=""
+  while (( $# > 0 )); do
+    case "$1" in
+      hosted|direct) [[ -z "$target" ]] || fail "ambiguous target: $1"; target=$1 ;;
+      --yes|-y) ASSUME_YES=true ;;
+      -h|--help) usage; exit 0 ;;
+      *) usage >&2; exit 64 ;;
+    esac
+    shift
+  done
+  [[ -n "$target" ]] || { usage >&2; exit 64; }
+
+  local current
+  current=$(current_mode)
+  if [[ "$current" == "$target" ]]; then
+    echo "Already using ${target} Google auth; nothing to do."
+    exit 0
+  fi
+
+  if [[ "$target" == "hosted" ]]; then
+    cat >&2 <<'EOF'
+
+You are switching to hosted Google OAuth: caldir.org relays the sign-in with
+its own Google Cloud client, so your own OAuth credentials are not needed.
+
+Trade-off: every access-token refresh goes through caldir.org. If that
+service is unreachable or retired, existing sessions stop syncing. Your
+OAuth tokens also pass through caldir.org's servers during each refresh.
+Your locally stored OAuth client (if any) is parked and restored if you
+switch back to direct mode.
+
+EOF
+  else
+    cat >&2 <<'EOF'
+
+You are switching to direct Google OAuth: authentication happens directly
+between this machine and Google, and caldir.org is never involved.
+
+Trade-off: you must have your own Desktop OAuth client in Google Cloud. If
+one was stored before, it is reused; otherwise setup will ask for a client
+ID and secret now.
+
+EOF
+  fi
+
+  confirm "Sign out of the current session and switch to ${target} Google auth?" || {
+    echo "Aborted; nothing was changed."
+    exit 0
+  }
+
+  mkdir -p "$SESSION_DIR"
+  local backup_dir config_transition="none" switch_complete=false
+  backup_dir=$(mktemp -d "${GOOGLE_CONFIG_DIR}/.session.auth-switch.XXXXXX")
+  chmod 700 "$backup_dir"
+
+  rollback_switch() {
+    local status=$?
+    trap - EXIT
+    if ! $switch_complete; then
+      rm -f -- "$SESSION_DIR"/*.toml
+      shopt -s nullglob
+      local saved_sessions=("$backup_dir"/*.toml)
+      if (( ${#saved_sessions[@]} > 0 )); then mv -- "${saved_sessions[@]}" "$SESSION_DIR"/; fi
+      if [[ "$config_transition" == "parked" && -f "$APP_CONFIG_PARKED" ]]; then
+        mv -- "$APP_CONFIG_PARKED" "$APP_CONFIG"
+      elif [[ "$config_transition" == "restored" && -f "$APP_CONFIG" ]]; then
+        mv -- "$APP_CONFIG" "$APP_CONFIG_PARKED"
+      fi
+      echo "Authentication did not complete; restored the previous session." >&2
+    fi
+    rm -rf -- "$backup_dir"
+    exit "$status"
+  }
+  trap rollback_switch EXIT
+
+  shopt -s nullglob
+  local existing_sessions=("$SESSION_DIR"/*.toml)
+  if (( ${#existing_sessions[@]} > 0 )); then mv -- "${existing_sessions[@]}" "$backup_dir"/; fi
+
+  if [[ "$target" == "hosted" ]]; then
+    if [[ -f "$APP_CONFIG" ]]; then
+      [[ ! -e "$APP_CONFIG_PARKED" ]] || fail "both active and parked OAuth client files exist; resolve them before switching"
+      mv -- "$APP_CONFIG" "$APP_CONFIG_PARKED"
+      config_transition="parked"
+      echo "Parked your OAuth client at ${APP_CONFIG_PARKED}; it returns on switch to direct."
+    fi
+    "$CALDIR_BIN" connect google
+  else
+    if [[ -f "$APP_CONFIG_PARKED" ]]; then
+      [[ ! -e "$APP_CONFIG" ]] || fail "both active and parked OAuth client files exist; resolve them before switching"
+      mv -- "$APP_CONFIG_PARKED" "$APP_CONFIG"
+      config_transition="restored"
+      echo "Restored your OAuth client from the parked copy."
+    fi
+    "$CALDIR_BIN" connect google --hosted=false
+  fi
+
+  local mode
+  mode=$(current_mode)
+  [[ "$mode" == "$target" ]] || fail "authentication completed in ${mode} mode instead of ${target}"
+  switch_complete=true
+  trap - EXIT
+  rm -rf -- "$backup_dir"
+  printf '\nDone. Current mode: %s.\n' "$mode"
+}
+
+case "${1:-}" in
+  status) shift; cmd_status "$@" ;;
+  switch) shift; cmd_switch "$@" ;;
+  --json) shift; cmd_status --json ;;
+  -h|--help|help) usage; exit 0 ;;
+  *) usage >&2; exit 64 ;;
+esac

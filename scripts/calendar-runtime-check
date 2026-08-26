@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Exit 0 when the verified Caldir runtime is installed, 1 otherwise. The
+# panel probes this on open and after every failed sync action so its setup
+# banner disappears as soon as setup has run.
+DATA_HOME="${XDG_DATA_HOME:-${HOME}/.local/share}"
+BUNDLED_BIN_DIR="${DATA_HOME}/omarchy-google-calendar-clock/bin"
+
+if [[ -x "${BUNDLED_BIN_DIR}/caldir" ]]; then
+  exit 0
+fi
+exit 1

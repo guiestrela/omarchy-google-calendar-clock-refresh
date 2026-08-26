@@ -1,0 +1,151 @@
+name: Prepare verified Caldir release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CALDIR_COMMIT: 65d3b5aa8a0c9eba0ffef365f14f2b41ba3d9dff
+  CALDIR_VERSION: 0.12.0
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      source_commit: ${{ steps.source.outputs.commit }}
+      version: ${{ steps.source.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - id: source
+        run: |
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r .version manifest.json)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_commit }}
+
+      - name: Verify release source
+        run: |
+          ! grep -Eq '<repository-url>|<raw-install-url>' README.md
+          ! find . -type f -name '*.ics' -print -quit | grep -q .
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Prepare patched Caldir source
+        run: |
+          git clone https://github.com/t4t5/caldir.git "$RUNNER_TEMP/caldir"
+          git -C "$RUNNER_TEMP/caldir" checkout --detach "$CALDIR_COMMIT"
+          git -C "$RUNNER_TEMP/caldir" apply "$GITHUB_WORKSPACE/patches/caldir-google.patch"
+
+      - name: Build binaries
+        working-directory: ${{ runner.temp }}/caldir
+        run: cargo build --locked --release -p caldir-cli -p caldir-provider-google
+
+      - name: Package and checksum
+        run: |
+          version=$(jq -r .version manifest.json)
+          asset="omarchy-google-calendar-clock-caldir-${version}-${{ matrix.arch }}-linux.tar.gz"
+          package="$RUNNER_TEMP/package"
+          mkdir -p "$package"
+          install -m 0755 "$RUNNER_TEMP/caldir/target/release/caldir" "$package/caldir"
+          install -m 0755 "$RUNNER_TEMP/caldir/target/release/caldir-provider-google" "$package/caldir-provider-google"
+          install -m 0644 "$RUNNER_TEMP/caldir/LICENSE" "$package/CALDIR-LICENSE"
+          strip "$package/caldir" "$package/caldir-provider-google"
+          printf 'Caldir commit: %s\nCaldir version: %s\nOmarchy Google Calendar and Clock version: %s\nPlugin source commit: %s\nArchitecture: %s\n' \
+            "$CALDIR_COMMIT" "$CALDIR_VERSION" "$version" "${{ needs.resolve.outputs.source_commit }}" "${{ matrix.arch }}" > "$package/BUILD-INFO"
+          tar -C "$package" -czf "$asset" BUILD-INFO CALDIR-LICENSE caldir caldir-provider-google
+          sha256sum "$asset" > "${asset}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: caldir-${{ matrix.arch }}
+          path: |
+            omarchy-google-calendar-clock-caldir-*.tar.gz
+            omarchy-google-calendar-clock-caldir-*.tar.gz.sha256
+
+  bind-and-publish:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: caldir-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-assets
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.source_commit }}
+          fetch-depth: 0
+
+      - name: Verify and commit release asset hashes
+        id: bind
+        env:
+          SOURCE_COMMIT: ${{ needs.resolve.outputs.source_commit }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          manifest="release-assets/v${VERSION}.json"
+          test ! -e "$manifest"
+          mkdir -p release-assets
+          for asset in "$RUNNER_TEMP"/release-assets/*.tar.gz; do
+            (
+              cd "$RUNNER_TEMP/release-assets"
+              sha256sum --check "$(basename "${asset}").sha256"
+            )
+          done
+          jq -n \
+            --arg version "$VERSION" \
+            --arg source "$SOURCE_COMMIT" \
+            --argjson assets "$(for asset in "$RUNNER_TEMP"/release-assets/*.tar.gz; do printf '%s\t%s\n' "$(basename "$asset")" "$(sha256sum "$asset" | cut -d' ' -f1)"; done | jq -Rn '[inputs | split("\t") | {key: .[0], value: .[1]}] | from_entries')" \
+            '{schemaVersion: 1, pluginVersion: $version, pluginSourceCommit: $source, assets: $assets}' > "$manifest"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add "$manifest"
+          git commit -m "Record v${VERSION} release asset hashes"
+          git push origin HEAD:main
+          echo "release_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Tag the hash-bound release
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+          git push origin "v${VERSION}"
+
+      - name: Attach binaries to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          tag="v${VERSION}"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" --generate-notes
+          gh release upload "$tag" "$RUNNER_TEMP"/release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
