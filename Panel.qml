@@ -2301,6 +2301,7 @@ Panel {
                   text: eventHourField.currentIndex < 0 ? "HH" : eventHourField.currentText
                   color: root.contentForeground
                   font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
                   verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
@@ -2326,8 +2327,21 @@ Panel {
                     clip: true
                     model: root.eventHours
                     delegate: Controls.ItemDelegate {
+                      id: eventHourOption
                       width: eventHourField.popup.width - 2
                       text: modelData
+                      contentItem: Text {
+                        text: eventHourOption.text
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                        verticalAlignment: Text.AlignVCenter
+                      }
+                      background: Rectangle {
+                        color: eventHourOption.hovered || eventHourOption.highlighted
+                          ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                          : Color.popups.background
+                      }
                       onClicked: {
                         eventHourField.currentIndex = index
                         eventHourField.popup.close()
@@ -2361,6 +2375,7 @@ Panel {
                   text: eventMinuteField.currentIndex < 0 ? "MM" : eventMinuteField.currentText
                   color: root.contentForeground
                   font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.caption
                   verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
@@ -2386,8 +2401,21 @@ Panel {
                     clip: true
                     model: root.eventMinutes
                     delegate: Controls.ItemDelegate {
+                      id: eventMinuteOption
                       width: eventMinuteField.popup.width - 2
                       text: modelData
+                      contentItem: Text {
+                        text: eventMinuteOption.text
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.caption
+                        verticalAlignment: Text.AlignVCenter
+                      }
+                      background: Rectangle {
+                        color: eventMinuteOption.hovered || eventMinuteOption.highlighted
+                          ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                          : Color.popups.background
+                      }
                       onClicked: {
                         eventMinuteField.currentIndex = index
                         eventMinuteField.popup.close()
