@@ -140,7 +140,8 @@ Panel {
   // instead of stepping the calendar month, and Tab walks the form through
   // the window's normal focus chain.
   readonly property bool calendarInputFocused: eventTitleField.activeFocus
-    || eventDescriptionField.activeFocus || eventTimeField.activeFocus
+    || eventDescriptionField.activeFocus || eventHourField.activeFocus
+    || eventMinuteField.activeFocus
     || eventRepeatCountField.activeFocus
   property string eventRepeatMode: "none"
   property string originalEventRecurrenceRule: ""
@@ -401,7 +402,8 @@ Panel {
     Qt.callLater(function() {
       eventTitleField.text = ""
       eventDescriptionField.text = ""
-      eventTimeField.text = ""
+      eventHourField.text = ""
+      eventMinuteField.text = ""
       eventRepeatCountField.text = ""
       eventTitleField.forceActiveFocus()
     })
@@ -429,7 +431,9 @@ Panel {
     Qt.callLater(function() {
       eventTitleField.text = String(event.title || "")
       eventDescriptionField.text = String(event.description || "")
-      eventTimeField.text = event.all_day ? "" : root.eventTimeLabel(event)
+      var timeParts = event.all_day ? [] : String(root.eventTimeLabel(event)).split(":")
+      eventHourField.text = timeParts.length === 2 ? timeParts[0] : ""
+      eventMinuteField.text = timeParts.length === 2 ? timeParts[1] : ""
       eventRepeatCountField.text = event.recurring ? recurrenceCountFromRule(root.originalEventRecurrenceRule) : ""
       eventTitleField.forceActiveFocus()
       eventTitleField.selectAll()
@@ -448,10 +452,11 @@ Panel {
   function saveLocalEvent() {
     var title = String(eventTitleField.text || "").trim()
     var description = String(eventDescriptionField.text || "").trim()
-    var time = String(eventTimeField.text || "").trim()
-    // An empty masked TextField exposes its literal separator (`:`) through
-    // `text`. Keep that implementation detail out of the helper arguments.
-    if (!/[0-9]/.test(time)) time = ""
+    var hour = String(eventHourField.text || "").trim()
+    var minute = String(eventMinuteField.text || "").trim()
+    if (/^\d$/.test(hour)) hour = "0" + hour
+    if (!/\d/.test(hour) && !/\d/.test(minute)) hour = minute = ""
+    var time = hour + ":" + minute
     var repeatCount = String(eventRepeatCountField.text || "").trim()
     if (title === "") {
       calendarSyncMessage = "Enter an event title"
@@ -468,7 +473,7 @@ Panel {
     }
     if (!root.eventAllDayEditing && !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time)) {
       calendarSyncMessage = "Time must use HH:MM"
-      eventTimeField.forceActiveFocus()
+      eventHourField.forceActiveFocus()
       return
     }
     if (root.eventAllDayEditing) time = ""
@@ -2248,7 +2253,8 @@ Panel {
 
               TextField {
                 id: eventTitleField
-                width: parent.width - eventAllDayButton.width - eventTimeField.width
+                width: parent.width - eventAllDayButton.width - eventHourField.width
+                  - eventTimeSeparator.width - eventMinuteField.width
                   - eventSaveButton.width - eventCancelButton.width
                   - (root.selectedAgendaEvent ? eventDeleteButton.width + Style.space(6) : 0) - Style.space(24)
                 placeholderText: "Event title"
@@ -2274,63 +2280,53 @@ Panel {
                   root.eventAllDayEditing = !root.eventAllDayEditing
                   root.calendarSyncMessage = ""
                   if (root.eventAllDayEditing) {
-                    eventTimeField.text = ""
+                    eventHourField.text = ""
+                    eventMinuteField.text = ""
                   } else {
-                    Qt.callLater(function() { eventTimeField.forceActiveFocus() })
+                    Qt.callLater(function() { eventHourField.forceActiveFocus() })
                   }
                 }
               }
 
               TextField {
-                id: eventTimeField
-                width: Style.space(70)
-                placeholderText: root.eventAllDayEditing ? "ALL DAY" : "HH:MM"
+                id: eventHourField
+                width: Style.space(27)
+                placeholderText: "HH"
                 foreground: root.contentForeground
                 font.family: root.contentFontFamily
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
                   && !root.eventTitleOnlyEditing
-                // Keep the friendly four-digit flow (0900 -> 09:00), but
-                // never let a click or Tab leave the caret in a blank mask
-                // slot. Input always resumes at the first missing digit.
-                inputMask: "00:00"
+                inputMask: "00"
                 selectByMouse: false
-                property bool normalizingSingleHour: false
+                validator: IntValidator { bottom: 0; top: 23 }
+                onActiveFocusChanged: if (activeFocus) Qt.callLater(selectAll)
+                Keys.onTabPressed: eventMinuteField.forceActiveFocus()
+                Keys.onReturnPressed: root.saveLocalEvent()
+                Keys.onEnterPressed: root.saveLocalEvent()
+                Keys.onEscapePressed: root.cancelEditingEvent()
+              }
 
-                // A one-digit hour should not force the user to type a
-                // leading zero. Once the first hour digit is entered, pad it
-                // and continue directly with the first minute digit (9 ->
-                // 09:__).
-                onTextChanged: {
-                  if (normalizingSingleHour) return
-                  var value = String(text || "")
-                  var match = value.match(/^([0-9])\s*:/)
-                  if (!match) return
-                  normalizingSingleHour = true
-                  text = "0" + match[1] + ":"
-                  cursorPosition = 3
-                  normalizingSingleHour = false
-                }
+              Text {
+                id: eventTimeSeparator
+                width: Style.space(7)
+                anchors.verticalCenter: parent.verticalCenter
+                text: ":"
+                color: root.contentForeground
+                font.family: root.contentFontFamily
+              }
 
-                function nextEditablePosition() {
-                  var value = String(text || "")
-                  var slots = [0, 1, 3, 4]
-                  for (var i = 0; i < slots.length; i++) {
-                    var character = value.charAt(slots[i])
-                    if (!/[0-9]/.test(character)) return slots[i]
-                  }
-                  return 5
-                }
-
-                function placeCursorAtNextDigit() {
-                  if (!activeFocus) return
-                  var next = nextEditablePosition()
-                  if (cursorPosition !== next) cursorPosition = next
-                }
-
-                onActiveFocusChanged: {
-                  if (activeFocus) Qt.callLater(placeCursorAtNextDigit)
-                }
-                onCursorPositionChanged: Qt.callLater(placeCursorAtNextDigit)
+              TextField {
+                id: eventMinuteField
+                width: Style.space(27)
+                placeholderText: "MM"
+                foreground: root.contentForeground
+                font.family: root.contentFontFamily
+                enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
+                  && !root.eventTitleOnlyEditing
+                inputMask: "00"
+                selectByMouse: false
+                validator: IntValidator { bottom: 0; top: 59 }
+                onActiveFocusChanged: if (activeFocus) Qt.callLater(selectAll)
                 Keys.onReturnPressed: root.saveLocalEvent()
                 Keys.onEnterPressed: root.saveLocalEvent()
                 Keys.onEscapePressed: root.cancelEditingEvent()
