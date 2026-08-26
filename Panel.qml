@@ -134,7 +134,12 @@ Panel {
   property string authMode: "none"
   property string authSession: ""
   property string authStatusError: ""
-  readonly property var eventHours: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23"]
+  readonly property bool clockUsesAmPm: hostWidget && hostWidget.activeFormat
+    ? /\b(?:AP|ap)\b/.test(String(hostWidget.activeFormat)) : false
+  readonly property var eventHours: clockUsesAmPm
+    ? ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+    : ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23"]
+  readonly property var eventPeriods: ["AM", "PM"]
   readonly property var eventMinutes: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59"]
 
   // While any editable text control holds focus the key catcher stands down:
@@ -406,6 +411,7 @@ Panel {
       eventDescriptionField.text = ""
       eventHourField.currentIndex = -1
       eventMinuteField.currentIndex = -1
+      eventPeriodField.currentIndex = -1
       eventRepeatCountField.text = ""
       eventTitleField.forceActiveFocus()
     })
@@ -434,8 +440,10 @@ Panel {
       eventTitleField.text = String(event.title || "")
       eventDescriptionField.text = String(event.description || "")
       var timeParts = event.all_day ? [] : String(root.eventTimeLabel(event)).split(":")
-      eventHourField.currentIndex = timeParts.length === 2 ? root.eventHours.indexOf(timeParts[0]) : -1
+      eventHourField.currentIndex = timeParts.length === 2 ? root.eventHours.indexOf(root.selectorHour(timeParts[0])) : -1
       eventMinuteField.currentIndex = timeParts.length === 2 ? root.eventMinutes.indexOf(timeParts[1]) : -1
+      eventPeriodField.currentIndex = timeParts.length === 2 && root.clockUsesAmPm
+        ? root.eventPeriods.indexOf(root.selectorPeriod(timeParts[0])) : -1
       eventRepeatCountField.text = event.recurring ? recurrenceCountFromRule(root.originalEventRecurrenceRule) : ""
       eventTitleField.forceActiveFocus()
       eventTitleField.selectAll()
@@ -456,6 +464,11 @@ Panel {
     var description = String(eventDescriptionField.text || "").trim()
     var hour = eventHourField.currentIndex >= 0 ? eventHourField.currentText : ""
     var minute = eventMinuteField.currentIndex >= 0 ? eventMinuteField.currentText : ""
+    if (root.clockUsesAmPm && hour !== "" && eventPeriodField.currentIndex >= 0) {
+      var hour12 = Number(hour) % 12
+      if (eventPeriodField.currentIndex === 1) hour12 += 12
+      hour = hour12 < 10 ? "0" + hour12 : String(hour12)
+    }
     if (!/\d/.test(hour) && !/\d/.test(minute)) hour = minute = ""
     var time = hour + ":" + minute
     var repeatCount = String(eventRepeatCountField.text || "").trim()
@@ -657,6 +670,18 @@ Panel {
     var start = new Date(event && event.start)
     if (isNaN(start.getTime())) return ""
     return Qt.formatTime(start, "HH:mm")
+  }
+
+  function selectorHour(hour24) {
+    var hour = Number(hour24)
+    if (!root.clockUsesAmPm) return String(hour24)
+    hour = hour % 12
+    if (hour === 0) hour = 12
+    return hour < 10 ? "0" + hour : String(hour)
+  }
+
+  function selectorPeriod(hour24) {
+    return Number(hour24) < 12 ? "AM" : "PM"
   }
 
   function eventKeyFor(event) {
@@ -2256,6 +2281,7 @@ Panel {
                 id: eventTitleField
                 width: parent.width - eventAllDayButton.width - eventHourField.width
                   - eventTimeSeparator.width - eventMinuteField.width
+                  - (root.clockUsesAmPm ? eventPeriodField.width : 0)
                   - eventSaveButton.width - eventCancelButton.width
                   - (root.selectedAgendaEvent ? eventDeleteButton.width + Style.space(6) : 0) - Style.space(24)
                 placeholderText: "Event title"
@@ -2283,6 +2309,7 @@ Panel {
                   if (root.eventAllDayEditing) {
                     eventHourField.currentIndex = -1
                     eventMinuteField.currentIndex = -1
+                    eventPeriodField.currentIndex = -1
                   } else {
                     Qt.callLater(function() { eventHourField.forceActiveFocus() })
                   }
@@ -2425,6 +2452,70 @@ Panel {
                 }
                 Keys.onReturnPressed: root.saveLocalEvent()
                 Keys.onEnterPressed: root.saveLocalEvent()
+                Keys.onEscapePressed: root.cancelEditingEvent()
+              }
+
+              Controls.ComboBox {
+                id: eventPeriodField
+                visible: root.clockUsesAmPm
+                width: Style.space(50)
+                model: root.eventPeriods
+                editable: false
+                enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
+                  && !root.eventTitleOnlyEditing
+                contentItem: Text {
+                  leftPadding: Style.space(5)
+                  text: eventPeriodField.currentIndex < 0 ? "AM/PM" : eventPeriodField.currentText
+                  color: root.contentForeground
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  verticalAlignment: Text.AlignVCenter
+                }
+                background: Rectangle {
+                  color: Color.popups.background
+                  border.color: eventPeriodField.activeFocus ? Color.accent : root.contentForeground
+                  border.width: 1
+                }
+                popup: Controls.Popup {
+                  y: eventPeriodField.height
+                  width: eventPeriodField.width
+                  height: Style.space(48)
+                  z: 100
+                  focus: true
+                  modal: true
+                  closePolicy: Controls.Popup.CloseOnEscape | Controls.Popup.CloseOnPressOutside
+                  padding: 1
+                  background: Rectangle {
+                    color: Color.popups.background
+                    border.color: Color.accent
+                    border.width: 1
+                  }
+                  contentItem: ListView {
+                    clip: true
+                    model: root.eventPeriods
+                    delegate: Controls.ItemDelegate {
+                      id: eventPeriodOption
+                      width: eventPeriodField.popup.width - 2
+                      text: modelData
+                      contentItem: Text {
+                        text: eventPeriodOption.text
+                        color: root.contentForeground
+                        font.family: root.contentFontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        verticalAlignment: Text.AlignVCenter
+                      }
+                      background: Rectangle {
+                        color: eventPeriodOption.hovered || eventPeriodOption.highlighted
+                          ? Style.hoverFillFor(root.contentForeground, Color.accent)
+                          : Color.popups.background
+                      }
+                      onClicked: {
+                        eventPeriodField.currentIndex = index
+                        eventPeriodField.popup.close()
+                      }
+                    }
+                  }
+                }
                 Keys.onEscapePressed: root.cancelEditingEvent()
               }
 
