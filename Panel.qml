@@ -2621,8 +2621,10 @@ Panel {
                 && !!root.nextMoonPhase && !root.agendaHasMoonPhase
               width: parent.width
               wrapMode: Text.Wrap
-              text: "Lunar phase: " + root.nextMoonPhase.title + " — "
-                + Qt.formatDate(new Date(root.nextMoonPhase.start + "T12:00:00"), "d MMM")
+              text: root.nextMoonPhase
+                ? "Lunar phase: " + root.nextMoonPhase.title + " — "
+                  + Qt.formatDate(new Date(root.nextMoonPhase.start + "T12:00:00"), "d MMM")
+                : ""
               color: Qt.darker(root.contentForeground, 1.45)
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.bodySmall
