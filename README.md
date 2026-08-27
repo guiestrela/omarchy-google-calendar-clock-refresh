@@ -41,7 +41,8 @@ patch, and reproducible release workflow are kept in this repository.
 
 ## Data access and permissions
 
-- No `sudo` or `pkexec` access is requested.
+- The plugin runs entirely as the current user and requests no elevated
+  permissions.
 - Setup writes the downloaded Caldir runtime under
   `~/.local/share/io.github.guiestrela.omarchy-google-calendar-clock/`.
 - Calendar data and Google OAuth credentials are managed under Caldir's XDG
