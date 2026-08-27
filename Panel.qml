@@ -2382,10 +2382,13 @@ Panel {
               Text {
                 id: eventTimeSeparator
                 width: Style.space(7)
-                anchors.verticalCenter: parent.verticalCenter
+                height: 22
                 text: ":"
                 color: root.contentForeground
                 font.family: root.contentFontFamily
+                font.pixelSize: Style.font.bodySmall
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
               }
 
               Controls.ComboBox {
