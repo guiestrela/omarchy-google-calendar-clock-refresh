@@ -1,8 +1,9 @@
 # Omarchy Google Calendar Clock Refresh
 
-This project is maintained by Guiestrela and is based on the original
+This community-maintained fork is based on the original
 [Omarchy Google Calendar and Clock](https://github.com/NachoRodriguezM/omarchy-google-calendar-clock)
-project. It adds personal behavior and interface changes for my Omarchy setup.
+project. It adds bidirectional Google Calendar sync, event editing, lunar
+phases, and interface refinements while preserving a local-first data model.
 
 Repository: [guiestrela/omarchy-google-calendar-clock-refresh](https://github.com/guiestrela/omarchy-google-calendar-clock-refresh)
 
@@ -26,14 +27,33 @@ telemetry.
 
 - Omarchy with the Quattro plugin API
 - An x86-64 or ARM64 Linux system
-- A Google account for Google sync
+- Bash, Python 3, `curl`, `jq`, GNU `coreutils`, and `tar` (included with a
+  standard Omarchy installation)
+- A Google account for optional Google Calendar sync
 
 The plugin downloads its own patched Caldir runtime; no Rust toolchain or
 separate Caldir installation is required.
 
 Each release includes one committed SHA-256 digest per architecture. Setup
 verifies the downloaded archive against the digest in the installed plugin
-checkout before extracting or executing it.
+checkout before extracting or executing it. The pinned Caldir source commit,
+patch, and reproducible release workflow are kept in this repository.
+
+## Data access and permissions
+
+- No `sudo` or `pkexec` access is requested.
+- Setup writes the downloaded Caldir runtime under
+  `~/.local/share/io.github.guiestrela.omarchy-google-calendar-clock/`.
+- Calendar data and Google OAuth credentials are managed under Caldir's XDG
+  data and configuration directories.
+- The derived event cache is written to
+  `~/.local/state/omarchy/calendar-cache.json` with owner-only permissions.
+- Direct OAuth talks to Google only. Hosted OAuth additionally sends OAuth
+  tokens through `caldir.org`, as explained before that mode is selected.
+- Setup changes the Omarchy bar only after the user explicitly runs it: it
+  disables the built-in clock, enables this widget, and makes it the center
+  anchor. The uninstaller restores the built-in clock and preserves unrelated
+  bar changes.
 
 ## Install and set up
 

@@ -85,17 +85,18 @@ EXPECTED_SHA256=$(jq -er --arg asset "$ASSET" --arg version "$ASSET_PLUGIN_VERSI
   echo "The committed release manifest has no valid digest for ${ASSET}." >&2
   exit 1
 }
-if command -v git \
+if command -v git >/dev/null \
     && [[ -z "$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]] \
     && source_commit=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null); then
   manifest_source_commit=$(jq -er '.pluginSourceCommit' "$RELEASE_MANIFEST")
-  [[ "$manifest_source_commit" == "$source_commit" ]] || {
-    git -C "$SCRIPT_DIR" merge-base --is-ancestor "$manifest_source_commit" "$source_commit" \
-      && git -C "$SCRIPT_DIR" diff --quiet "$manifest_source_commit" "$source_commit" -- . ':(exclude)release-assets' || {
-    echo "The release manifest does not match this plugin source checkout." >&2
-    exit 1
-    }
-  }
+  if [[ "$manifest_source_commit" != "$source_commit" ]]; then
+    if ! git -C "$SCRIPT_DIR" merge-base --is-ancestor "$manifest_source_commit" "$source_commit" \
+        || ! git -C "$SCRIPT_DIR" diff --quiet "$manifest_source_commit" "$source_commit" -- \
+          .github/workflows/release.yml patches/caldir-google.patch; then
+      echo "The release manifest does not match this plugin source checkout." >&2
+      exit 1
+    fi
+  fi
 fi
 if [[ -n "${CALENDAR_CLOCK_ASSET_BASE_URL:-}" ]]; then
   RELEASE_BASE=${CALENDAR_CLOCK_ASSET_BASE_URL%/}
