@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,7 @@ from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+MAX_CALENDAR_BYTES = 1024 * 1024
 
 
 def fail(message: str, code: int = 64) -> None:
@@ -25,8 +28,34 @@ def escape_text(value: str) -> str:
     return value.replace("\\", "\\\\").replace("\n", "\\n").replace(";", "\\;").replace(",", "\\,")
 
 
+def read_regular_text(path: Path, limit: int) -> str:
+    """Read at most limit bytes from a non-symlink regular file."""
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError(errno.EINVAL, "not a regular file", path)
+        if metadata.st_size > limit:
+            raise OSError(errno.EFBIG, "file exceeds size limit", path)
+        chunks: list[bytes] = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > limit:
+            raise OSError(errno.EFBIG, "file exceeds size limit", path)
+        return payload.decode("utf-8")
+    finally:
+        os.close(descriptor)
+
+
 def atomic_add_metadata(path: Path, rrule: str, description: str) -> None:
-    lines = path.read_text(encoding="utf-8").replace("\r\n", "\n").splitlines()
+    lines = read_regular_text(path, MAX_CALENDAR_BYTES).replace("\r\n", "\n").splitlines()
     if rrule and any(line.upper().startswith("RRULE:") for line in lines):
         fail("The new event unexpectedly already has a recurrence rule", 1)
     insert_at = next((index for index, line in enumerate(lines) if line.upper() == "END:VEVENT"), len(lines))

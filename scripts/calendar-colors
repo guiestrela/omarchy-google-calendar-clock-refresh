@@ -20,6 +20,8 @@ CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME}/.config}"
 GOOGLE_CONFIG_DIR="${CONFIG_HOME}/caldir/providers/google"
 SESSION_DIR="${GOOGLE_CONFIG_DIR}/session"
 APP_CONFIG="${GOOGLE_CONFIG_DIR}/app_config.toml"
+MAX_API_RESPONSE_BYTES=1048576
+CURL_LIMITS=(--connect-timeout 10 --max-time 30 --max-filesize "$MAX_API_RESPONSE_BYTES")
 
 calendar_dir=$("$CALDIR_BIN" config --json | jq -r '.config.calendar_dir')
 calendar_dir="${calendar_dir/#\~/$HOME}"
@@ -47,7 +49,7 @@ refresh_token_for() {
   fi
   auth_mode=$(toml_value "$session_file" auth_mode)
   if [[ "$auth_mode" == "hosted" ]]; then
-    response=$(curl --fail --silent --show-error \
+    response=$(curl --fail --silent --show-error "${CURL_LIMITS[@]}" \
       -H "Content-Type: application/json" \
       --data @- "https://caldir.org/auth/google/refresh" 2>/dev/null <<EOF
 {"refresh_token":"$(toml_value "$session_file" refresh_token)"}
@@ -57,7 +59,7 @@ EOF
     client_id=$(toml_value "$APP_CONFIG" client_id)
     client_secret=$(toml_value "$APP_CONFIG" client_secret)
     [[ -n "$client_id" && -n "$client_secret" ]] || return 1
-    response=$(curl --fail --silent --show-error \
+    response=$(curl --fail --silent --show-error "${CURL_LIMITS[@]}" \
       --data-urlencode "client_id=$client_id" \
       --data-urlencode "client_secret=$client_secret" \
       --data-urlencode "refresh_token=$(toml_value "$session_file" refresh_token)" \
@@ -75,7 +77,7 @@ for session_file in "$SESSION_DIR"/*.toml; do
   fi
   access_token=$(refresh_token_for "$session_file") || continue
   [[ -n "$access_token" ]] || continue
-  calendar_list=$(curl --fail --silent --show-error \
+  calendar_list=$(curl --fail --silent --show-error "${CURL_LIMITS[@]}" \
     -H "Authorization: Bearer $access_token" \
     "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader&fields=items(id,backgroundColor)" 2>/dev/null) || continue
   color_map=$(jq -c '.items | map(select(.backgroundColor != null)) | map({key: .id, value: .backgroundColor}) | from_entries' <<<"$calendar_list" 2>/dev/null)

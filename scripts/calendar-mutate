@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,6 +17,8 @@ from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+MAX_CALENDAR_BYTES = 1024 * 1024
+MAX_CONFIG_BYTES = 64 * 1024
 
 
 class CalendarError(Exception):
@@ -50,8 +54,34 @@ def unfold(lines: list[str]) -> list[str]:
     return result
 
 
+def read_regular_text(path: Path, limit: int) -> str:
+    """Read at most limit bytes from a non-symlink regular file."""
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError(errno.EINVAL, "not a regular file", path)
+        if metadata.st_size > limit:
+            raise OSError(errno.EFBIG, "file exceeds size limit", path)
+        chunks: list[bytes] = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) > limit:
+            raise OSError(errno.EFBIG, "file exceeds size limit", path)
+        return payload.decode("utf-8")
+    finally:
+        os.close(descriptor)
+
+
 def read_lines(path: Path) -> list[str]:
-    return unfold(path.read_text(encoding="utf-8").replace("\r\n", "\n").splitlines())
+    return unfold(read_regular_text(path, MAX_CALENDAR_BYTES).replace("\r\n", "\n").splitlines())
 
 
 def property_name(line: str) -> str:
@@ -128,7 +158,11 @@ def calendar_is_read_only(calendar_path: Path) -> bool:
     config = calendar_path / ".caldir/config.toml"
     if not config.is_file():
         raise CalendarError("This calendar has no local Caldir configuration")
-    match = re.search(r"(?m)^read_only\s*=\s*(true|false)\s*$", config.read_text(encoding="utf-8"))
+    try:
+        contents = read_regular_text(config, MAX_CONFIG_BYTES)
+    except (OSError, UnicodeError) as error:
+        raise CalendarError("This calendar's local Caldir configuration could not be read safely") from error
+    match = re.search(r"(?m)^read_only\s*=\s*(true|false)\s*$", contents)
     return not match or match.group(1) == "true"
 
 
