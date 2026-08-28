@@ -32,6 +32,11 @@ toml_value() {
   awk -F' = ' -v key="$2" '$1 == key { gsub(/^"|"$/, "", $2); print $2; exit }' "$1"
 }
 
+# URL-encode a form value without putting it in another process's argv.
+urlencode() {
+  jq -sRr @uri
+}
+
 # refresh_token_for <session_file>: print a usable access token, exchanging
 # the stored refresh token when the stored access token is near expiry.
 # Direct sessions exchange through Google with their own OAuth client;
@@ -58,13 +63,17 @@ EOF
   else
     client_id=$(toml_value "$APP_CONFIG" client_id)
     client_secret=$(toml_value "$APP_CONFIG" client_secret)
+    refresh_token=$(toml_value "$session_file" refresh_token)
     [[ -n "$client_id" && -n "$client_secret" ]] || return 1
+    client_id=$(printf '%s' "$client_id" | urlencode)
+    client_secret=$(printf '%s' "$client_secret" | urlencode)
+    refresh_token=$(printf '%s' "$refresh_token" | urlencode)
     response=$(curl --fail --silent --show-error "${CURL_LIMITS[@]}" \
-      --data-urlencode "client_id=$client_id" \
-      --data-urlencode "client_secret=$client_secret" \
-      --data-urlencode "refresh_token=$(toml_value "$session_file" refresh_token)" \
-      --data-urlencode "grant_type=refresh_token" \
-      "https://oauth2.googleapis.com/token" 2>/dev/null) || return 1
+      -H "Content-Type: application/x-www-form-urlencoded" \
+      --data-binary @- "https://oauth2.googleapis.com/token" 2>/dev/null <<EOF
+client_id=$client_id&client_secret=$client_secret&refresh_token=$refresh_token&grant_type=refresh_token
+EOF
+    ) || return 1
   fi
   jq -r '.access_token // empty' <<<"$response"
 }
@@ -77,8 +86,9 @@ for session_file in "$SESSION_DIR"/*.toml; do
   fi
   access_token=$(refresh_token_for "$session_file") || continue
   [[ -n "$access_token" ]] || continue
-  calendar_list=$(curl --fail --silent --show-error "${CURL_LIMITS[@]}" \
-    -H "Authorization: Bearer $access_token" \
+  calendar_list=$(printf 'Authorization: Bearer %s\n' "$access_token" | \
+    curl --fail --silent --show-error "${CURL_LIMITS[@]}" \
+    -H @- \
     "https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=reader&fields=items(id,backgroundColor)" 2>/dev/null) || continue
   color_map=$(jq -c '.items | map(select(.backgroundColor != null)) | map({key: .id, value: .backgroundColor}) | from_entries' <<<"$calendar_list" 2>/dev/null)
   [[ -n "$color_map" && "$color_map" != "{}" ]] || continue
