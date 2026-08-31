@@ -34,6 +34,24 @@ telemetry.
 The plugin downloads its own patched Caldir runtime; no Rust toolchain or
 separate Caldir installation is required.
 
+## Security, theme, fonts, and technology
+
+- **Security:** all downloaded runtime archives are restricted to HTTPS/TLS
+  1.2+, checked against a committed SHA-256 digest, verified for an exact file
+  inventory, and installed with owner-only temporary files. OAuth credentials,
+  tokens, and the derived cache remain readable only by the current user; no
+  elevated permissions or telemetry are used.
+- **Theme:** the panel uses Omarchy `Color` and `Style` tokens. Calendar
+  colors can follow Google Calendar or the active Omarchy theme; synthetic
+  lunar events also follow the selected theme instead of using a fixed color.
+- **Fonts:** bar and panel text inherit the active Omarchy font (`bar.fontFamily`
+  with `Style.font.family` as fallback), while sizes use the shared Omarchy
+  typography scale for consistent rendering.
+- **Technology:** Qt 6/QML and Quickshell power the UI; Bash and Python
+  provide the local bridge; Caldir handles ICS, recurrence, time zones, and
+  Google synchronization; `jq`, `curl`, and GitHub Actions support the
+  validated runtime and release pipeline.
+
 Each release includes one committed SHA-256 digest per architecture. Setup
 verifies the downloaded archive against the digest in the installed plugin
 checkout before extracting or executing it. The pinned Caldir source commit,

@@ -610,7 +610,16 @@ Panel {
   function eventColors(dateKey) {
     var entry = calendarEventsByDate[dateKey]
     if (!entry) return []
-    if (root.calendarColorMode === "google") return entry.colors
+    if (root.calendarColorMode === "google") {
+      var googleColors = entry.colors.slice()
+      for (var i = 0; i < entry.events.length; i++) {
+        if (String(entry.events[i].calendar || "") === "moon") {
+          var moonColor = root.themeCalendarColor("moon")
+          if (googleColors.indexOf(moonColor) === -1) googleColors.push(moonColor)
+        }
+      }
+      return googleColors
+    }
 
     var colors = []
     for (var i = 0; i < entry.events.length; i++) {
@@ -634,6 +643,8 @@ Panel {
   function displayCalendarColor(event) {
     if (root.calendarColorMode === "theme")
       return root.themeCalendarColor(String((event && event.calendar) || ""))
+    if (String((event && event.calendar) || "") === "moon")
+      return root.themeCalendarColor("moon")
     return CalendarModel.calendarColor(event) || Color.accent
   }
 

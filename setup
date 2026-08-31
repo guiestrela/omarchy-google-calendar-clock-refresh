@@ -117,6 +117,13 @@ else
   RELEASE_BASE="https://github.com/${repository}/releases/download/v${ASSET_PLUGIN_VERSION}"
 fi
 
+# The release endpoint is an executable-binary supply chain boundary. Permit
+# only HTTPS here, including when a mirror is supplied for testing or forks.
+[[ "$RELEASE_BASE" =~ ^https://[^[:space:]]+$ ]] || {
+  echo "The Caldir release URL must use HTTPS." >&2
+  exit 1
+}
+
 WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/io.github.guiestrela.omarchy-google-calendar-clock-setup.XXXXXX")
 NEW_BIN_DIR="${INSTALL_ROOT}/.bin.new.$$"
 BACKUP_BIN_DIR="${INSTALL_ROOT}/.bin.backup.$$"
@@ -165,7 +172,8 @@ activate_plugin() {
 }
 
 echo "Downloading Omarchy Google Calendar and Clock's patched Caldir ${VERSION} for ${ASSET_ARCH}..."
-curl --fail --location --silent --show-error "${RELEASE_BASE}/${ASSET}" --output "${WORK_DIR}/${ASSET}"
+curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+  "${RELEASE_BASE}/${ASSET}" --output "${WORK_DIR}/${ASSET}"
 printf '%s  %s\n' "$EXPECTED_SHA256" "$ASSET" | (
   cd "$WORK_DIR"
   sha256sum --check --status -

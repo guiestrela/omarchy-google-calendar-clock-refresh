@@ -36,7 +36,10 @@ function addMoonPhases(events, rangeStart, rangeEnd) {
       if (dateKey < rangeStart || dateKey > rangeEnd) continue
       result.push({
         calendar: "moon",
-        calendar_color: "#8b8bff",
+        // Panel.qml maps this synthetic calendar to the active Omarchy theme.
+        // Do not persist a fixed color that becomes unreadable after a theme
+        // switch.
+        calendar_color: null,
         calendar_read_only: true,
         event_read_only: true,
         event_title_only: false,
