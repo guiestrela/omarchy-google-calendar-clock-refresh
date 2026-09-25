@@ -356,8 +356,20 @@ Panel {
 
   // Summoning by hotkey moves no pointer, so a hover the bar was still
   // holding must not keep the center indicators revealed behind the panel.
+  //
+  // Current Omarchy shells expose this through PluginBarApi as a read-only
+  // property mirrored from Bar.qml, mutable only via
+  // bar.setCenterHoverRevealSuppressed(). Direct assignment throws a
+  // TypeError on every call (see omarchy-shell log: "Cannot assign to
+  // read-only property"), which spams the log on every panel open/close and
+  // was observed interfering with this panel's keyboard-focus-prime cycle,
+  // leaving the layer-shell surface stuck holding exclusive keyboard focus.
+  // Prefer the setter; keep the direct assignment as a fallback for older
+  // shells that predate it.
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
+    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
+    else if (root.bar && "centerHoverRevealSuppressed" in root.bar)
       root.bar.centerHoverRevealSuppressed = value
   }
 
