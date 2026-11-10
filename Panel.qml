@@ -1412,6 +1412,16 @@ Panel {
     // below the bar instead of being centered in the remaining screen space.
     contentHeight: panel.fittedContentHeight(calendarColumn.implicitHeight)
 
+    // Keep dismissal available even if a child control or popup has taken
+    // active focus away from PanelKeyCatcher. The window-scoped shortcut
+    // makes Escape close the calendar from anywhere inside this panel.
+    Shortcut {
+      sequence: "Escape"
+      context: Qt.WindowShortcut
+      enabled: panel.open
+      onActivated: root.close()
+    }
+
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
