@@ -172,7 +172,7 @@ activate_plugin() {
 }
 
 echo "Downloading Omarchy Google Calendar and Clock's patched Caldir ${VERSION} for ${ASSET_ARCH}..."
-curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error \
+curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-filesize 209715200 --silent --show-error \
   "${RELEASE_BASE}/${ASSET}" --output "${WORK_DIR}/${ASSET}"
 printf '%s  %s\n' "$EXPECTED_SHA256" "$ASSET" | (
   cd "$WORK_DIR"

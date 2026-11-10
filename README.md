@@ -82,6 +82,9 @@ Add and enable the plugin with Omarchy:
 omarchy plugin add https://github.com/guiestrela/omarchy-google-calendar-clock-refresh --enable
 ```
 
+When the widget is enabled in the bar, it automatically disables the built-in
+`omarchy.clock` widget so only one clock occupies the bar.
+
 If an older installation is still present, remove it first with
 `omarchy plugin remove omarchy-google-calendar-clock --yes`, then run the
 installation command above. The renamed plugin uses the ID

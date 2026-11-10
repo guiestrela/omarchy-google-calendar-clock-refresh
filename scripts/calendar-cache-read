@@ -3,8 +3,15 @@
 set -euo pipefail
 
 CACHE_FILE="${HOME}/.local/state/omarchy/calendar-cache.json"
-if [[ ! -r "$CACHE_FILE" ]]; then
+if [[ ! -f "$CACHE_FILE" || -L "$CACHE_FILE" || ! -r "$CACHE_FILE" ]]; then
   printf '{"ok":false,"error":"Calendar cache is not ready yet"}\n'
+  exit 0
+fi
+
+# Never hand an unbounded local cache to the long-lived Quickshell process.
+cache_bytes=$(wc -c < "$CACHE_FILE")
+if (( cache_bytes > 2097152 )); then
+  printf '{"ok":false,"error":"Calendar cache exceeds the size limit"}\n'
   exit 0
 fi
 

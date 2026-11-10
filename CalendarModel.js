@@ -2,9 +2,30 @@
 // ICS itself. Caldir already handles recurrence, time zones, and provider IDs.
 
 function parseBridgeOutput(text) {
+  // The local bridge reads user calendar data; fail closed before JSON.parse
+  // if a damaged cache or unexpected process output is unreasonably large.
+  var source = String(text || "")
+  if (source.length > 2 * 1024 * 1024)
+    return { events: [], rangeStart: "", rangeEnd: "", error: "Calendar data is too large" }
   try {
-    var result = JSON.parse(String(text || ""))
+    var result = JSON.parse(source)
     if (result && result.ok === true && Array.isArray(result.events)) {
+      if (result.events.length > 5000)
+        return { events: [], rangeStart: "", rangeEnd: "", error: "Calendar data contains too many events" }
+      result.events = result.events.slice(0, 5000).map(function(event) {
+        if (!event || typeof event !== "object" || Array.isArray(event)) return null
+        var bounded = {}
+        var fields = ["calendar", "calendar_color", "uid", "instance_id", "title", "description", "start", "end", "conference_url", "location", "recurrence_rule", "provider_event_type"]
+        for (var i = 0; i < fields.length; i++) {
+          var key = fields[i]
+          if (event[key] === undefined || event[key] === null) continue
+          if (typeof event[key] === "string") bounded[key] = event[key].slice(0, key === "description" ? 8192 : 512)
+        }
+        var booleanFields = ["calendar_read_only", "event_read_only", "event_title_only", "all_day", "recurring"]
+        for (var j = 0; j < booleanFields.length; j++)
+          if (typeof event[booleanFields[j]] === "boolean") bounded[booleanFields[j]] = event[booleanFields[j]]
+        return bounded
+      }).filter(function(event) { return event !== null })
       var start = /^\d{4}-\d{2}-\d{2}$/.test(String(result.range_start || "")) ? result.range_start : ""
       var end = /^\d{4}-\d{2}-\d{2}$/.test(String(result.range_end || "")) ? result.range_end : ""
       return { events: addMoonPhases(result.events, start, end), rangeStart: start, rangeEnd: end, error: "" }

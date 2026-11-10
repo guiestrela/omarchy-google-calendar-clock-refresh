@@ -3,6 +3,7 @@ import QtQuick.Controls as Controls
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 import "CalendarModel.js" as CalendarModel
@@ -66,8 +67,9 @@ Panel {
   // starts out matching the rest of the desktop rather than a hardcoded
   // convention. Clicking the grid's "W" heading writes the choice back to
   // shell.json.
-  readonly property int weekStart: Model.normalizedWeekStart(setting("weekStartDay", null), Qt.locale().firstDayOfWeek)
-  readonly property string nextWeekStartLabel: Qt.locale().dayName(Model.toggledWeekStart(weekStart), Locale.LongFormat)
+  readonly property var formatLocale: Qt.locale(Commons.I18n.formatLocale)
+  readonly property int weekStart: Model.normalizedWeekStart(setting("weekStartDay", null), formatLocale.firstDayOfWeek)
+  readonly property string nextWeekStartLabel: formatLocale.dayName(Model.toggledWeekStart(weekStart), Locale.LongFormat)
   readonly property var weekdays: Model.weekdayOrder(weekStart)
   readonly property var weeks: Model.monthGrid(viewYear, viewMonth, weekStart, todayKey)
 
@@ -681,7 +683,7 @@ Panel {
     if (event && event.all_day) return "ALL DAY"
     var start = new Date(event && event.start)
     if (isNaN(start.getTime())) return ""
-    return Qt.formatTime(start, "HH:mm")
+    return Qt.formatTime(start, "HH:mm", root.formatLocale)
   }
 
   function selectorHour(hour24) {
@@ -794,15 +796,21 @@ Panel {
     var links = CalendarModel.eventMeetingLinks(event)
     if (links.length > 0) description += "\n" + links[0]
 
-    reminderProcess.command = [root.helperPath("calendar-notify"), headline, description]
+    reminderProcess.command = [root.helperPath("calendar-notify"), root.notificationPlainText(headline), root.notificationPlainText(description)]
     reminderProcess.running = true
     return true
+  }
+
+  // Omarchy owns the notification renderer, so escape markup-shaped calendar
+  // input before passing it to that shared text sink.
+  function notificationPlainText(value) {
+    return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   }
 
   function lastPullLabel() {
     if (lastCalendarPull === "") return "Not pulled from Google yet"
     var date = new Date(lastCalendarPull)
-    return isNaN(date.getTime()) ? "Pulled from Google" : "Last pull: " + Qt.formatDateTime(date, "d MMM, HH:mm")
+    return isNaN(date.getTime()) ? "Pulled from Google" : "Last pull: " + Qt.formatDateTime(date, "d MMM, HH:mm", root.formatLocale)
   }
 
   function prefetchStartDate() {
@@ -825,7 +833,7 @@ Panel {
   function prefetchRangeLabel() {
     var start = new Date(prefetchStartDate() + "T12:00:00")
     var end = new Date(prefetchEndDate() + "T12:00:00")
-    return Qt.formatDate(start, "MMM yyyy") + "–" + Qt.formatDate(end, "MMM yyyy")
+    return Qt.formatDate(start, "MMM yyyy", root.formatLocale) + "–" + Qt.formatDate(end, "MMM yyyy", root.formatLocale)
   }
 
   // When browsing reaches the last two cached months, fetch another window
@@ -1045,7 +1053,7 @@ Panel {
   // Locale short day names, trimmed of the trailing period some locales
   // carry ("man." -> "MAN") so the header row stays a clean band of caps.
   function weekdayLabel(weekday) {
-    return String(Qt.locale().dayName(weekday, Locale.ShortFormat)).replace(/\.$/, "").toUpperCase()
+    return String(root.formatLocale.dayName(weekday, Locale.ShortFormat)).replace(/\.$/, "").toUpperCase()
   }
 
   SystemClock {
@@ -1453,7 +1461,7 @@ Panel {
               anchors.horizontalCenter: parent.horizontalCenter
               spacing: Style.space(22)
 
-              Text {
+              PlainText {
                 // Baseline-aligned, not center-aligned: "July 26" carries a
                 // descender, so centering the two boxes leaves the icon
                 // sitting visibly low against the digits.
@@ -1469,10 +1477,10 @@ Panel {
                 font.pixelSize: 48
               }
 
-              Text {
+              PlainText {
                 id: heroDate
                 anchors.verticalCenter: parent.verticalCenter
-                text: Qt.formatDate(root.today, "MMMM d")
+                text: Qt.formatDate(root.today, "MMMM d", root.formatLocale)
                 color: heroMouse.containsMouse
                   ? Style.hoverStateColor(root.contentForeground, Color.accent)
                   : root.contentForeground
@@ -1537,7 +1545,7 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(10)
 
-                Text {
+                PlainText {
                   anchors.verticalCenter: parent.verticalCenter
                   text: "BORN"
                   color: Qt.darker(root.contentForeground, 1.5)
@@ -1558,7 +1566,7 @@ Panel {
                   Keys.onPressed: function(event) { root.handleLifeKey(event, expectancyField) }
                 }
 
-                Text {
+                PlainText {
                   anchors.verticalCenter: parent.verticalCenter
                   anchors.verticalCenterOffset: 0
                   leftPadding: Style.space(6)
@@ -1582,7 +1590,7 @@ Panel {
                 }
               }
 
-              Text {
+              PlainText {
                 id: yearLabel
                 visible: !root.editingLife
                 anchors.left: parent.left
@@ -1594,7 +1602,7 @@ Panel {
                 font.letterSpacing: 1
               }
 
-              Text {
+              PlainText {
                 id: yearPercent
                 visible: !root.editingLife
                 anchors.right: parent.right
@@ -1623,7 +1631,7 @@ Panel {
                   radius: parent.radius
                   color: Style.selectedStateColor(root.contentForeground, Color.accent)
 
-                  Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                  Behavior on width { NumberAnimation { duration: Style.duration(160); easing.type: Easing.OutCubic } }
                 }
               }
             }
@@ -1643,7 +1651,7 @@ Panel {
               width: gridColumn.width
               height: Math.max(lifeLabel.implicitHeight, Style.space(10))
 
-              Text {
+              PlainText {
                 id: lifeLabel
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
@@ -1654,7 +1662,7 @@ Panel {
                 font.letterSpacing: 1
               }
 
-              Text {
+              PlainText {
                 id: lifePercent
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
@@ -1680,7 +1688,7 @@ Panel {
                   radius: parent.radius
                   color: Style.selectedStateColor(root.contentForeground, Color.accent)
 
-                  Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                  Behavior on width { NumberAnimation { duration: Style.duration(160); easing.type: Easing.OutCubic } }
                 }
               }
 
@@ -1743,7 +1751,7 @@ Panel {
                     ? Style.hoverFillFor(root.contentForeground, Color.accent)
                     : "transparent"
 
-                  Text {
+                  PlainText {
                     anchors.centerIn: parent
                     text: "W"
                     color: weekStartMouse.containsMouse
@@ -1778,7 +1786,7 @@ Panel {
                 Repeater {
                   model: root.weekdays
 
-                  Text {
+                  PlainText {
                     required property var modelData
                     width: root.cellWidth
                     height: Style.space(16)
@@ -1801,7 +1809,7 @@ Panel {
                   required property var modelData
                   spacing: root.cellSpacing
 
-                  Text {
+                  PlainText {
                     width: root.weekColumnWidth
                     height: root.cellHeight
                     horizontalAlignment: Text.AlignHCenter
@@ -1835,7 +1843,7 @@ Panel {
                         ? Style.spacing.hairline : 0
                       border.color: Style.normalBorderFor(root.contentForeground, Color.accent)
 
-                      Text {
+                      PlainText {
                         anchors.centerIn: parent
                         text: modelData.day
                         color: modelData.inMonth
@@ -1913,7 +1921,7 @@ Panel {
               width: gridColumn.width
               height: monthLabel.implicitHeight + Style.space(10)
 
-              Text {
+              PlainText {
                 id: monthLabel
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.verticalCenter: parent.verticalCenter
@@ -1921,7 +1929,7 @@ Panel {
                 // "MAY 2026" and a "SEPTEMBER 2026".
                 width: Style.space(130)
                 horizontalAlignment: Text.AlignHCenter
-                text: Qt.formatDate(root.viewDate, "MMMM yyyy").toUpperCase()
+                text: Qt.formatDate(root.viewDate, "MMMM yyyy", root.formatLocale).toUpperCase()
                 color: Qt.darker(root.contentForeground, 1.4)
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.body
@@ -1977,11 +1985,11 @@ Panel {
               width: parent.width
               height: agendaLabel.implicitHeight
 
-              Text {
+              PlainText {
                 id: agendaLabel
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
-                text: Qt.formatDate(new Date(root.agendaDateKey + "T12:00:00"), "dddd, MMMM d").toUpperCase()
+                text: Qt.formatDate(new Date(root.agendaDateKey + "T12:00:00"), "dddd, MMMM d", root.formatLocale).toUpperCase()
                 color: Qt.darker(root.contentForeground, 1.5)
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -2042,7 +2050,7 @@ Panel {
                 width: parent.width - Style.space(12)
                 spacing: Style.space(6)
 
-                Text {
+                PlainText {
                   width: parent.width
                   wrapMode: Text.Wrap
                   text: "Google sync needs setup. Choose how Google OAuth should work:"
@@ -2079,7 +2087,7 @@ Panel {
                   }
                 }
 
-                Text {
+                PlainText {
                   width: parent.width
                   wrapMode: Text.Wrap
                   text: "Direct uses your own Google Cloud client and keeps token refreshes between this machine and Google. Hosted needs no client, but caldir.org relays sign-in and future token refreshes."
@@ -2114,7 +2122,7 @@ Panel {
                       color: root.calendarColorForSlug(modelData.slug)
                     }
 
-                    Text {
+                    PlainText {
                       text: modelData.slug + (modelData.readOnly ? " (read-only)" : "")
                       color: Qt.darker(root.contentForeground, 1.5)
                       font.family: root.contentFontFamily
@@ -2125,7 +2133,7 @@ Panel {
                   Repeater {
                     model: modelData.details
 
-                    Text {
+                    PlainText {
                       required property var modelData
                       leftPadding: Style.space(13)
                       width: parent.width
@@ -2145,7 +2153,7 @@ Panel {
               width: parent.width
               spacing: Style.space(6)
 
-              Text {
+              PlainText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "APPLY TO"
                 color: Qt.darker(root.contentForeground, 1.6)
@@ -2169,7 +2177,7 @@ Panel {
                 }
               }
 
-              Text {
+              PlainText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "THIS EVENT"
                 color: root.eventMutationScope === "instance" ? Color.accent : Qt.darker(root.contentForeground, 1.5)
@@ -2192,7 +2200,7 @@ Panel {
                 }
               }
 
-              Text {
+              PlainText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "WHOLE SERIES"
                 color: root.eventMutationScope === "series" ? Color.accent : Qt.darker(root.contentForeground, 1.5)
@@ -2206,7 +2214,7 @@ Panel {
               width: parent.width
               spacing: Style.space(5)
 
-              Text {
+              PlainText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.selectedAgendaEvent ? "SCHEDULE" : "REPEAT"
                 color: Qt.darker(root.contentForeground, 1.6)
@@ -2238,7 +2246,7 @@ Panel {
                 }
               }
 
-              Text {
+              PlainText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.eventRepeatLabel()
                 color: (!root.selectedAgendaEvent || root.eventMutationScope === "series")
@@ -2247,7 +2255,7 @@ Panel {
                 font.pixelSize: Style.font.caption
               }
 
-              Text {
+              PlainText {
                 visible: root.eventRepeatMode !== "none"
                 anchors.verticalCenter: parent.verticalCenter
                 text: "TIMES"
@@ -2332,7 +2340,7 @@ Panel {
                 editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
                   && !root.eventTitleOnlyEditing
-                contentItem: Text {
+                contentItem: PlainText {
                   leftPadding: Style.space(5)
                   text: eventHourField.currentIndex < 0 ? "HH" : eventHourField.currentText
                   color: root.contentForeground
@@ -2366,7 +2374,7 @@ Panel {
                       id: eventHourOption
                       width: eventHourField.popup.width - 2
                       text: modelData
-                      contentItem: Text {
+                      contentItem: PlainText {
                         text: eventHourOption.text
                         color: root.contentForeground
                         font.family: root.contentFontFamily
@@ -2390,7 +2398,7 @@ Panel {
                 Keys.onEscapePressed: root.cancelEditingEvent()
               }
 
-              Text {
+              PlainText {
                 id: eventTimeSeparator
                 width: Style.space(7)
                 height: 22
@@ -2410,7 +2418,7 @@ Panel {
                 editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
                   && !root.eventTitleOnlyEditing
-                contentItem: Text {
+                contentItem: PlainText {
                   leftPadding: Style.space(5)
                   text: eventMinuteField.currentIndex < 0 ? "MM" : eventMinuteField.currentText
                   color: root.contentForeground
@@ -2444,7 +2452,7 @@ Panel {
                       id: eventMinuteOption
                       width: eventMinuteField.popup.width - 2
                       text: modelData
-                      contentItem: Text {
+                      contentItem: PlainText {
                         text: eventMinuteOption.text
                         color: root.contentForeground
                         font.family: root.contentFontFamily
@@ -2477,7 +2485,7 @@ Panel {
                 editable: false
                 enabled: !root.eventAllDayEditing && !root.calendarCreating && !root.calendarMutating
                   && !root.eventTitleOnlyEditing
-                contentItem: Text {
+                contentItem: PlainText {
                   leftPadding: Style.space(5)
                   text: eventPeriodField.currentIndex < 0 ? "AM/PM" : eventPeriodField.currentText
                   color: root.contentForeground
@@ -2511,7 +2519,7 @@ Panel {
                       id: eventPeriodOption
                       width: eventPeriodField.popup.width - 2
                       text: modelData
-                      contentItem: Text {
+                      contentItem: PlainText {
                         text: eventPeriodOption.text
                         color: root.contentForeground
                         font.family: root.contentFontFamily
@@ -2608,7 +2616,7 @@ Panel {
               }
             }
 
-            Text {
+            PlainText {
               visible: !root.calendarLoading && root.calendarError !== ""
               width: parent.width
               wrapMode: Text.Wrap
@@ -2618,7 +2626,7 @@ Panel {
               font.pixelSize: Style.font.bodySmall
             }
 
-            Text {
+            PlainText {
               visible: !root.editingEvent && !root.calendarLoading && root.calendarError === ""
                 && root.agendaEvents.length === 0 && !root.nextMoonPhase
               text: "No events"
@@ -2627,14 +2635,14 @@ Panel {
               font.pixelSize: Style.font.bodySmall
             }
 
-            Text {
+            PlainText {
               visible: !root.editingEvent && !root.calendarLoading && root.calendarError === ""
                 && !!root.nextMoonPhase && !root.agendaHasMoonPhase
               width: parent.width
               wrapMode: Text.Wrap
               text: root.nextMoonPhase
                 ? "Lunar phase: " + root.nextMoonPhase.title + " — "
-                  + Qt.formatDate(new Date(root.nextMoonPhase.start + "T12:00:00"), "d MMM")
+                  + Qt.formatDate(new Date(root.nextMoonPhase.start + "T12:00:00"), "d MMM", root.formatLocale)
                 : ""
               color: Qt.darker(root.contentForeground, 1.45)
               font.family: root.contentFontFamily
@@ -2692,7 +2700,7 @@ Panel {
                       color: root.displayCalendarColor(modelData)
                     }
 
-                    Text {
+                    PlainText {
                       width: Style.space(58)
                       text: root.eventTimeLabel(modelData)
                       color: Qt.darker(root.contentForeground, 1.5)
@@ -2707,7 +2715,7 @@ Panel {
                         - (modelData.calendar_read_only || modelData.event_read_only ? 0 : deleteAgendaButton.width + Style.space(7))
                       height: Math.max(eventTitle.implicitHeight, Style.space(22))
 
-                      Text {
+                      PlainText {
                         id: eventTitle
                         anchors.left: parent.left
                         anchors.right: descriptionChevron.visible ? descriptionChevron.left : parent.right
@@ -2722,7 +2730,7 @@ Panel {
                         font.bold: agendaEvent.isNextEvent
                       }
 
-                      Text {
+                      PlainText {
                         id: descriptionChevron
                         visible: agendaEvent.hasDescription
                         anchors.right: parent.right
@@ -2796,7 +2804,7 @@ Button {
                   }
                 }
 
-                Text {
+                PlainText {
                   visible: agendaEvent.descriptionExpanded
                   // Indent to the title column: the row's 5px frame inset
                   // plus indicator, gap, and time column.
@@ -2822,7 +2830,7 @@ Button {
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: statusSpinner.visible ? Style.space(6) : 0
 
-            Text {
+            PlainText {
               id: statusSpinner
               visible: root.calendarProgressVisible
               anchors.verticalCenter: parent.verticalCenter
@@ -2841,7 +2849,7 @@ Button {
               }
             }
 
-            Text {
+            PlainText {
               anchors.verticalCenter: parent.verticalCenter
               width: parent.width - (statusSpinner.visible ? statusSpinner.implicitWidth + parent.spacing : 0)
               wrapMode: Text.Wrap
@@ -2892,7 +2900,7 @@ Button {
             width: parent.width
             height: Math.max(settingsTitle.implicitHeight, settingsCloseButton.implicitHeight)
 
-            Text {
+            PlainText {
               id: settingsTitle
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
@@ -2924,7 +2932,7 @@ Button {
             opacity: 0.12
           }
 
-          Text {
+          PlainText {
             width: parent.width
             text: "GOOGLE OAUTH"
             color: Qt.darker(root.contentForeground, 1.5)
@@ -2933,7 +2941,7 @@ Button {
             font.letterSpacing: 1
           }
 
-          Text {
+          PlainText {
             width: parent.width
             wrapMode: Text.Wrap
             text: root.authStatusLoading
@@ -2979,7 +2987,7 @@ Button {
             }
           }
 
-          Text {
+          PlainText {
             width: parent.width
             wrapMode: Text.Wrap
             text: "Switching signs out the current session and opens the interactive setup flow. Stored direct credentials are preserved."
@@ -2995,7 +3003,7 @@ Button {
             opacity: 0.12
           }
 
-          Text {
+          PlainText {
             width: parent.width
             text: "CALENDAR COLORS"
             color: Qt.darker(root.contentForeground, 1.5)
@@ -3054,7 +3062,7 @@ Button {
               color: root.themeCalendarSecondary
             }
 
-            Text {
+            PlainText {
               anchors.verticalCenter: parent.verticalCenter
               text: "Follows the active Omarchy theme"
               color: Qt.darker(root.contentForeground, 1.65)
@@ -3070,7 +3078,7 @@ Button {
             opacity: 0.12
           }
 
-          Text {
+          PlainText {
             width: parent.width
             text: "REMOVE PLUGIN"
             color: Qt.darker(root.contentForeground, 1.5)
@@ -3079,7 +3087,7 @@ Button {
             font.letterSpacing: 1
           }
 
-          Text {
+          PlainText {
             width: parent.width
             wrapMode: Text.Wrap
             text: "Remove this widget, restore the built-in clock in the bar center, and choose whether to delete Google credentials and calendar data."

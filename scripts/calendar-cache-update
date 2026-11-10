@@ -42,7 +42,7 @@ fi
 # already-local store and remains instantaneous for the UI.
 pull_start=$range_start
 pull_end=$range_end
-if [[ -r "$CACHE_FILE" ]]; then
+if [[ -f "$CACHE_FILE" && ! -L "$CACHE_FILE" && -r "$CACHE_FILE" ]]; then
   cached_start=$(jq -r '.range_start // empty' "$CACHE_FILE" 2>/dev/null || true)
   cached_end=$(jq -r '.range_end // empty' "$CACHE_FILE" 2>/dev/null || true)
   if [[ $cached_start =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && $cached_start < $range_start ]]; then
@@ -61,6 +61,11 @@ if $pull; then
 fi
 
 snapshot=$("$EVENTS_BIN" "$range_start" "$range_end")
+snapshot_bytes=$(LC_ALL=C printf '%s' "$snapshot" | wc -c)
+if (( snapshot_bytes > 2097152 )); then
+  echo "Calendar snapshot exceeds the 2 MiB cache limit" >&2
+  exit 1
+fi
 if ! jq -e '.ok == true and (.events | type == "array")' >/dev/null <<<"$snapshot"; then
   jq -r '.error // "Could not build calendar cache"' <<<"$snapshot" >&2
   exit 1

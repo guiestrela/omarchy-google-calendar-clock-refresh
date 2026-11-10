@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
@@ -15,6 +16,13 @@ BarWidget {
   moduleName: "io.github.guiestrela.omarchy-google-calendar-clock"
 
   property date displayDate: clock.date
+  property bool builtinClockDisableStarted: false
+
+  function disableBuiltinClock() {
+    if (!root.bar || root.builtinClockDisableStarted) return
+    root.builtinClockDisableStarted = true
+    disableBuiltinClockProcess.running = true
+  }
 
   readonly property string configuredFormat: vertical
     ? setting("verticalFormat", "HH\n—\nmm")
@@ -53,7 +61,7 @@ BarWidget {
   }
 
   function formatted(date) {
-    return Qt.formatDateTime(date, activeFormat.replace(/ww/g, Model.isoWeekLiteral(date.getFullYear(), date.getMonth(), date.getDate())))
+    return Qt.formatDateTime(date, activeFormat.replace(/ww/g, Model.isoWeekLiteral(date.getFullYear(), date.getMonth(), date.getDate())), Qt.locale(Commons.I18n.formatLocale))
   }
 
   // ---- Calendar popup. Shape contract for shell.summon/hide/toggle
@@ -106,8 +114,25 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onBarChanged: injectPanel()
+  onBarChanged: {
+    injectPanel()
+    disableBuiltinClock()
+  }
   onSettingsChanged: injectPanel()
+
+  Component.onCompleted: disableBuiltinClock()
+
+  // `omarchy plugin add --enable` activates this widget before the optional
+  // calendar setup flow runs. Disable the competing built-in clock as soon as
+  // this widget is actually mounted in the bar.
+  Process {
+    id: disableBuiltinClockProcess
+    command: ["omarchy", "plugin", "disable", "omarchy.clock"]
+    onExited: function(exitCode) {
+      if (exitCode !== 0)
+        console.warn("Could not disable the built-in omarchy.clock plugin")
+    }
+  }
 
   SystemClock {
     id: clock
