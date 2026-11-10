@@ -41,7 +41,7 @@ function extractFunction(name) {
   throw new Error(`Unbalanced body for ${name}()`);
 }
 
-function makeHarness(initiallyOpen) {
+function makeHarness(initiallyOpen, hasBarMutator = true) {
   let opened = initiallyOpen;
   const barCalls = [];
   const bar = {};
@@ -50,7 +50,8 @@ function makeHarness(initiallyOpen) {
     get() { return false; },
     set() { throw new TypeError('Cannot assign to read-only property "centerHoverRevealSuppressed"'); },
   });
-  bar.setCenterHoverRevealSuppressed = (value) => barCalls.push(Boolean(value));
+  if (hasBarMutator)
+    bar.setCenterHoverRevealSuppressed = (value) => barCalls.push(Boolean(value));
 
   const root = {
     bar,
@@ -92,6 +93,13 @@ function makeHarness(initiallyOpen) {
   harness.functions.close();
   assert.equal(harness.isOpen(), false, "close() must reach PanelController.hide() with the read-only PluginBarApi facade");
   assert.deepEqual(harness.barCalls, [false], "close() must use the facade mutator rather than assign its read-only property");
+}
+
+{
+  const harness = makeHarness(true, false);
+  assert.doesNotThrow(() => harness.functions.close(), "close() must tolerate a facade without the optional hover mutator");
+  assert.equal(harness.isOpen(), false, "close() must hide the panel even if hover suppression is unavailable");
+  assert.deepEqual(harness.barCalls, []);
 }
 
 {
