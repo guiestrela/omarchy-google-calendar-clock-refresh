@@ -1414,11 +1414,12 @@ Panel {
 
     // Keep dismissal available even if a child control or popup has taken
     // active focus away from PanelKeyCatcher. The window-scoped shortcut
-    // makes Escape close the calendar from anywhere inside this panel.
+    // makes Escape close the calendar from anywhere in the shell window,
+    // including when focus is inside one of the nested editor controls.
     Shortcut {
       sequence: "Escape"
-      context: Qt.WindowShortcut
-      enabled: panel.open
+      context: Qt.ApplicationShortcut
+      enabled: root.opened && !root.editingEvent && !root.editingLife
       onActivated: root.close()
     }
 
@@ -1465,6 +1466,14 @@ Panel {
           Item {
             width: parent.width
             height: heroRow.height
+
+            PanelActionButton {
+              anchors.top: parent.top
+              anchors.left: parent.left
+              iconText: "󰅖"
+              tooltipText: "Close calendar"
+              onClicked: root.close()
+            }
 
             Row {
               id: heroRow
