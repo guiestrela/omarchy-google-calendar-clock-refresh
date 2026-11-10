@@ -288,8 +288,8 @@ Panel {
     if (!root.bar || typeof root.bar.run !== "function") return
     var hosted = String(mode || "") === "hosted"
     var launcher = "omarchy-launch-floating-terminal-with-presentation"
-    root.bar.run(launcher + " " + Util.shellQuote(root.setupPath()) + (hosted ? " --hosted" : ""))
     root.close()
+    root.bar.run(launcher + " " + Util.shellQuote(root.setupPath()) + (hosted ? " --hosted" : ""))
   }
 
   // Full removal must remain an interactive terminal flow: it asks separately
@@ -683,7 +683,7 @@ Panel {
     if (event && event.all_day) return "ALL DAY"
     var start = new Date(event && event.start)
     if (isNaN(start.getTime())) return ""
-    return Qt.formatTime(start, "HH:mm", root.formatLocale)
+    return start.toLocaleTimeString(root.formatLocale, "HH:mm")
   }
 
   function selectorHour(hour24) {
@@ -810,7 +810,7 @@ Panel {
   function lastPullLabel() {
     if (lastCalendarPull === "") return "Not pulled from Google yet"
     var date = new Date(lastCalendarPull)
-    return isNaN(date.getTime()) ? "Pulled from Google" : "Last pull: " + Qt.formatDateTime(date, "d MMM, HH:mm", root.formatLocale)
+    return isNaN(date.getTime()) ? "Pulled from Google" : "Last pull: " + date.toLocaleString(root.formatLocale, "d MMM, HH:mm")
   }
 
   function prefetchStartDate() {
@@ -833,7 +833,7 @@ Panel {
   function prefetchRangeLabel() {
     var start = new Date(prefetchStartDate() + "T12:00:00")
     var end = new Date(prefetchEndDate() + "T12:00:00")
-    return Qt.formatDate(start, "MMM yyyy", root.formatLocale) + "–" + Qt.formatDate(end, "MMM yyyy", root.formatLocale)
+    return start.toLocaleString(root.formatLocale, "MMM yyyy") + "–" + end.toLocaleString(root.formatLocale, "MMM yyyy")
   }
 
   // When browsing reaches the last two cached months, fetch another window
@@ -1480,7 +1480,7 @@ Panel {
               PlainText {
                 id: heroDate
                 anchors.verticalCenter: parent.verticalCenter
-                text: Qt.formatDate(root.today, "MMMM d", root.formatLocale)
+                text: root.today.toLocaleString(root.formatLocale, "MMMM d")
                 color: heroMouse.containsMouse
                   ? Style.hoverStateColor(root.contentForeground, Color.accent)
                   : root.contentForeground
@@ -1929,7 +1929,7 @@ Panel {
                 // "MAY 2026" and a "SEPTEMBER 2026".
                 width: Style.space(130)
                 horizontalAlignment: Text.AlignHCenter
-                text: Qt.formatDate(root.viewDate, "MMMM yyyy", root.formatLocale).toUpperCase()
+                text: root.viewDate.toLocaleString(root.formatLocale, "MMMM yyyy").toUpperCase()
                 color: Qt.darker(root.contentForeground, 1.4)
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.body
@@ -1989,7 +1989,7 @@ Panel {
                 id: agendaLabel
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
-                text: Qt.formatDate(new Date(root.agendaDateKey + "T12:00:00"), "dddd, MMMM d", root.formatLocale).toUpperCase()
+                text: new Date(root.agendaDateKey + "T12:00:00").toLocaleString(root.formatLocale, "dddd, MMMM d").toUpperCase()
                 color: Qt.darker(root.contentForeground, 1.5)
                 font.family: root.contentFontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -2642,7 +2642,7 @@ Panel {
               wrapMode: Text.Wrap
               text: root.nextMoonPhase
                 ? "Lunar phase: " + root.nextMoonPhase.title + " — "
-                  + Qt.formatDate(new Date(root.nextMoonPhase.start + "T12:00:00"), "d MMM", root.formatLocale)
+                  + new Date(root.nextMoonPhase.start + "T12:00:00").toLocaleString(root.formatLocale, "d MMM")
                 : ""
               color: Qt.darker(root.contentForeground, 1.45)
               font.family: root.contentFontFamily

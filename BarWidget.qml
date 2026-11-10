@@ -61,7 +61,9 @@ BarWidget {
   }
 
   function formatted(date) {
-    return Qt.formatDateTime(date, activeFormat.replace(/ww/g, Model.isoWeekLiteral(date.getFullYear(), date.getMonth(), date.getDate())), Qt.locale(Commons.I18n.formatLocale))
+    var week = Model.isoWeekLiteral(date.getFullYear(), date.getMonth(), date.getDate())
+    week = week.split("").map(function(digit) { return Commons.I18n.formatNumber(digit) }).join("")
+    return date.toLocaleString(Qt.locale(Commons.I18n.formatLocale), activeFormat.replace(/ww/g, week))
   }
 
   // ---- Calendar popup. Shape contract for shell.summon/hide/toggle
