@@ -1406,29 +1406,14 @@ Panel {
     bar: root.bar
     open: root.opened
     centerOnBar: true
-    // KeyboardPanel owns its content as a separate, measured QML item. A
-    // plain visual child can render but sits outside the panel's input item,
-    // leaving the popup visible while mouse clicks pass through it.
-    focusTarget: panel.loadedContent
+    focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(560))
     // Match Omarchy's native calendar: on a top bar the panel opens directly
     // below the bar instead of being centered in the remaining screen space.
     contentHeight: panel.fittedContentHeight(calendarColumn.implicitHeight)
 
-    // Keep dismissal available even if a child control or popup has taken
-    // active focus away from PanelKeyCatcher. The window-scoped shortcut
-    // makes Escape close the calendar from anywhere in the shell window,
-    // including when focus is inside one of the nested editor controls.
-    Shortcut {
-      sequence: "Escape"
-      context: Qt.ApplicationShortcut
-      enabled: root.opened && !root.editingEvent && !root.editingLife
-      onActivated: root.close()
-    }
-
-    content: PanelKeyCatcher {
+    PanelKeyCatcher {
       id: keyCatcher
-      implicitHeight: calendarColumn.implicitHeight
       anchors.fill: parent
       blocked: root.editingLife || root.calendarInputFocused || root.settingsOpen
       onMoveRequested: function(dx, dy) {
