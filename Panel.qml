@@ -359,7 +359,9 @@ Panel {
   // Summoning by hotkey moves no pointer, so a hover the bar was still
   // holding must not keep the center indicators revealed behind the panel.
   function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && "centerHoverRevealSuppressed" in root.bar)
+    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function")
+      root.bar.setCenterHoverRevealSuppressed(value)
+    else if (root.bar && "centerHoverRevealSuppressed" in root.bar)
       root.bar.centerHoverRevealSuppressed = value
   }
 
@@ -1397,6 +1399,15 @@ Panel {
     // border, but avoids the animated bright-then-dim fill transition.
     color: selected ? Style.selectedFillFor(foreground, accent) : background
     onClicked: chosen(optionValue)
+  }
+
+  // Keep Escape dismissal available when settings focus blocks PanelKeyCatcher.
+  // This must remain outside KeyboardPanel's QQuickItem-only content list.
+  Shortcut {
+    sequence: "Escape"
+    context: Qt.ApplicationShortcut
+    enabled: root.opened && !root.editingEvent && !root.editingLife
+    onActivated: root.close()
   }
 
   KeyboardPanel {

@@ -24,6 +24,11 @@ APP_CONFIG="${GOOGLE_CONFIG_DIR}/app_config.toml"
 APP_CONFIG_PARKED="${GOOGLE_CONFIG_DIR}/app_config.toml.direct"
 ASSUME_YES=false
 
+# EXIT cleanup runs after cmd_switch returns, so trap state must outlive its locals.
+SWITCH_BACKUP_DIR=""
+SWITCH_CONFIG_TRANSITION="none"
+SWITCH_COMPLETE=false
+
 usage() {
   cat <<'EOF'
 Usage: calendar-auth-mode status [--json]
@@ -160,39 +165,40 @@ EOF
   }
 
   mkdir -p "$SESSION_DIR"
-  local backup_dir config_transition="none" switch_complete=false
-  backup_dir=$(mktemp -d "${GOOGLE_CONFIG_DIR}/.session.auth-switch.XXXXXX")
-  chmod 700 "$backup_dir"
+  SWITCH_CONFIG_TRANSITION="none"
+  SWITCH_COMPLETE=false
+  SWITCH_BACKUP_DIR=$(mktemp -d "${GOOGLE_CONFIG_DIR}/.session.auth-switch.XXXXXX")
+  chmod 700 "$SWITCH_BACKUP_DIR"
 
   rollback_switch() {
     local status=$?
     trap - EXIT
-    if ! $switch_complete; then
+    if ! $SWITCH_COMPLETE; then
       rm -f -- "$SESSION_DIR"/*.toml
       shopt -s nullglob
-      local saved_sessions=("$backup_dir"/*.toml)
+      local saved_sessions=("$SWITCH_BACKUP_DIR"/*.toml)
       if (( ${#saved_sessions[@]} > 0 )); then mv -- "${saved_sessions[@]}" "$SESSION_DIR"/; fi
-      if [[ "$config_transition" == "parked" && -f "$APP_CONFIG_PARKED" ]]; then
+      if [[ "$SWITCH_CONFIG_TRANSITION" == "parked" && -f "$APP_CONFIG_PARKED" ]]; then
         mv -- "$APP_CONFIG_PARKED" "$APP_CONFIG"
-      elif [[ "$config_transition" == "restored" && -f "$APP_CONFIG" ]]; then
+      elif [[ "$SWITCH_CONFIG_TRANSITION" == "restored" && -f "$APP_CONFIG" ]]; then
         mv -- "$APP_CONFIG" "$APP_CONFIG_PARKED"
       fi
       echo "Authentication did not complete; restored the previous session." >&2
     fi
-    rm -rf -- "$backup_dir"
+    rm -rf -- "$SWITCH_BACKUP_DIR"
     exit "$status"
   }
   trap rollback_switch EXIT
 
   shopt -s nullglob
   local existing_sessions=("$SESSION_DIR"/*.toml)
-  if (( ${#existing_sessions[@]} > 0 )); then mv -- "${existing_sessions[@]}" "$backup_dir"/; fi
+  if (( ${#existing_sessions[@]} > 0 )); then mv -- "${existing_sessions[@]}" "$SWITCH_BACKUP_DIR"/; fi
 
   if [[ "$target" == "hosted" ]]; then
     if [[ -f "$APP_CONFIG" ]]; then
       [[ ! -e "$APP_CONFIG_PARKED" ]] || fail "both active and parked OAuth client files exist; resolve them before switching"
       mv -- "$APP_CONFIG" "$APP_CONFIG_PARKED"
-      config_transition="parked"
+      SWITCH_CONFIG_TRANSITION="parked"
       echo "Parked your OAuth client at ${APP_CONFIG_PARKED}; it returns on switch to direct."
     fi
     "$CALDIR_BIN" connect google
@@ -200,7 +206,7 @@ EOF
     if [[ -f "$APP_CONFIG_PARKED" ]]; then
       [[ ! -e "$APP_CONFIG" ]] || fail "both active and parked OAuth client files exist; resolve them before switching"
       mv -- "$APP_CONFIG_PARKED" "$APP_CONFIG"
-      config_transition="restored"
+      SWITCH_CONFIG_TRANSITION="restored"
       echo "Restored your OAuth client from the parked copy."
     fi
     "$CALDIR_BIN" connect google --hosted=false
@@ -209,9 +215,9 @@ EOF
   local mode
   mode=$(current_mode)
   [[ "$mode" == "$target" ]] || fail "authentication completed in ${mode} mode instead of ${target}"
-  switch_complete=true
+  SWITCH_COMPLETE=true
   trap - EXIT
-  rm -rf -- "$backup_dir"
+  rm -rf -- "$SWITCH_BACKUP_DIR"
   printf '\nDone. Current mode: %s.\n' "$mode"
 }
 
