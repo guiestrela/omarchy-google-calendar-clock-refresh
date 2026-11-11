@@ -318,11 +318,9 @@ Panel {
     refresh()
     if (calendarLoadedYear !== viewYear) refreshCalendar(viewYear)
     root.controller.show()
-    setCenterHoverRevealSuppressed(true)
   }
 
   function close() {
-    setCenterHoverRevealSuppressed(false)
     // Dismissing the panel mid-edit would otherwise leave the inputs up,
     // waiting behind a closed popup for the next time it opens.
     if (root.editingLife) root.cancelEditingLife()
@@ -356,12 +354,6 @@ Panel {
     return false
   }
 
-  // Summoning by hotkey moves no pointer, so a hover the bar was still
-  // holding must not keep the center indicators revealed behind the panel.
-  function setCenterHoverRevealSuppressed(value) {
-    if (root.bar && typeof root.bar.setCenterHoverRevealSuppressed === "function")
-      root.bar.setCenterHoverRevealSuppressed(value)
-  }
 
   function refresh() {
     root.today = new Date()

@@ -51,7 +51,10 @@ function makeHarness(initiallyOpen, hasBarMutator = true) {
     set() { throw new TypeError('Cannot assign to read-only property "centerHoverRevealSuppressed"'); },
   });
   if (hasBarMutator)
-    bar.setCenterHoverRevealSuppressed = (value) => barCalls.push(Boolean(value));
+    bar.setCenterHoverRevealSuppressed = (value) => {
+      barCalls.push(Boolean(value));
+      throw new TypeError('Cannot assign to read-only property "centerHoverRevealSuppressed"');
+    };
 
   const root = {
     bar,
@@ -74,7 +77,8 @@ function makeHarness(initiallyOpen, hasBarMutator = true) {
 
   const timers = { stop() {} };
   const definitions = [
-    extractFunction("setCenterHoverRevealSuppressed"),
+    ...(panelSource.includes("function setCenterHoverRevealSuppressed(")
+      ? [extractFunction("setCenterHoverRevealSuppressed")] : []),
     extractFunction("open"),
     extractFunction("close"),
     extractFunction("toggle"),
@@ -92,7 +96,7 @@ function makeHarness(initiallyOpen, hasBarMutator = true) {
   const harness = makeHarness(true);
   harness.functions.close();
   assert.equal(harness.isOpen(), false, "close() must reach PanelController.hide() with the read-only PluginBarApi facade");
-  assert.deepEqual(harness.barCalls, [false], "close() must use the facade mutator rather than assign its read-only property");
+  assert.deepEqual(harness.barCalls, [], "close() must not invoke the broken optional hover API");
 }
 
 {
@@ -112,7 +116,7 @@ function makeHarness(initiallyOpen, hasBarMutator = true) {
   assert.equal(harness.isOpen(), true, "toggle() must reopen the panel");
   harness.functions.toggle();
   assert.equal(harness.isOpen(), false, "toggle() must close the reopened panel");
-  assert.deepEqual(harness.barCalls, [true, false, true, false]);
+  assert.deepEqual(harness.barCalls, [], "open/close/toggle must not depend on the broken hover API");
 }
 
 {
@@ -137,4 +141,5 @@ function makeHarness(initiallyOpen, hasBarMutator = true) {
   assert.ok(panelSource.includes("focusTarget: keyCatcher"));
 }
 
-console.log("panel lifecycle regression passed");
+assert.ok(!panelSource.includes("setCenterHoverRevealSuppressed"), "the panel must not retain the removed API dependency");
+console.log("panel lifecycle regression passed (throwing hover API is never called)");
