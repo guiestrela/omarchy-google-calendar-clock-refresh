@@ -129,6 +129,7 @@ Panel {
   property string eventMutationScope: "instance"
   property bool calendarMutating: false
   property bool calendarDeleteArmed: false
+  property string calendarDeleteArmedTarget: ""
   property string calendarMutationOutput: ""
   property string calendarMutationAction: ""
   property bool settingsOpen: false
@@ -151,7 +152,7 @@ Panel {
   // the window's normal focus chain.
   readonly property bool calendarInputFocused: eventTitleField.activeFocus
     || eventDescriptionField.activeFocus || eventHourField.activeFocus
-    || eventMinuteField.activeFocus
+    || eventMinuteField.activeFocus || eventPeriodField.activeFocus
     || eventRepeatCountField.activeFocus
   property string eventRepeatMode: "none"
   property string originalEventRecurrenceRule: ""
@@ -199,6 +200,8 @@ Panel {
   //      sweep re-evaluate without polling timers.
   property date eventClock: new Date()
   property bool eventNotificationsEnabled: String(setting("eventNotifications", "true")).toLowerCase() !== "false"
+  property string reminderInFlightKey: ""
+  property var reminderAttempts: ({})
   readonly property string calendarColorMode: String(setting("calendarColorMode", "google")).toLowerCase() === "theme"
     ? "theme" : "google"
   readonly property int settingsCardWidth: Style.space(300)
@@ -459,6 +462,12 @@ Panel {
     var description = String(eventDescriptionField.text || "").trim()
     var hour = eventHourField.currentIndex >= 0 ? eventHourField.currentText : ""
     var minute = eventMinuteField.currentIndex >= 0 ? eventMinuteField.currentText : ""
+    if (!root.eventAllDayEditing && root.clockUsesAmPm && hour !== ""
+        && (eventPeriodField.currentIndex < 0 || eventPeriodField.currentIndex > 1)) {
+      root.calendarSyncMessage = "Choose AM or PM"
+      eventPeriodField.forceActiveFocus()
+      return
+    }
     if (root.clockUsesAmPm && hour !== "" && eventPeriodField.currentIndex >= 0) {
       var hour12 = Number(hour) % 12
       if (eventPeriodField.currentIndex === 1) hour12 += 12
@@ -517,18 +526,32 @@ Panel {
   }
 
   function deleteSelectedEvent() {
-    if (!selectedAgendaEvent || calendarMutating) return
+    if (!root.selectedAgendaEvent || root.calendarMutating) return
+    var targetKey = [
+      String(root.selectedAgendaEvent.calendar || ""),
+      String(root.selectedAgendaEvent.uid || ""),
+      String(root.selectedAgendaEvent.instance_id || ""),
+      root.eventMutationScope
+    ].join("|")
+    if (!root.calendarDeleteArmed || root.calendarDeleteArmedTarget !== targetKey) {
+      root.calendarDeleteArmed = true
+      root.calendarDeleteArmedTarget = targetKey
+      root.calendarSyncMessage = root.deleteConfirmationMessage() + " Click again to confirm."
+      calendarDeleteConfirmation.restart()
+      return
+    }
     calendarDeleteConfirmation.stop()
-    calendarDeleteArmed = false
-    calendarMutating = true
-    calendarMutationAction = "delete"
-    calendarMutationOutput = ""
+    root.calendarDeleteArmed = false
+    root.calendarDeleteArmedTarget = ""
+    root.calendarMutating = true
+    root.calendarMutationAction = "delete"
+    root.calendarMutationOutput = ""
     calendarMutationProcess.command = [
       root.helperPath("calendar-mutate"), "delete",
-      eventMutationScope,
-      String(selectedAgendaEvent.calendar || ""),
-      String(selectedAgendaEvent.uid || ""),
-      String(selectedAgendaEvent.instance_id || ""),
+      root.eventMutationScope,
+      String(root.selectedAgendaEvent.calendar || ""),
+      String(root.selectedAgendaEvent.uid || ""),
+      String(root.selectedAgendaEvent.instance_id || ""),
       "--confirm"
     ]
     calendarMutationProcess.running = true
@@ -547,12 +570,19 @@ Panel {
     return "Delete only this event from the recurring series?"
   }
 
-  function deleteTooltipText() {
-    if (!selectedAgendaEvent || !selectedAgendaEvent.recurring)
-      return "Delete event"
-    return eventMutationScope === "series"
-      ? "Delete the whole recurring series"
-      : "Delete only this event"
+  function deleteTooltipText(event) {
+    var target = event || selectedAgendaEvent
+    if (!target) return "Delete event locally (click again to confirm)"
+    var scope = target === selectedAgendaEvent
+      ? eventMutationScope : (target.recurring ? "instance" : "series")
+    var targetKey = [String(target.calendar || ""), String(target.uid || ""),
+      String(target.instance_id || ""), scope].join("|")
+    if (calendarDeleteArmed && calendarDeleteArmedTarget === targetKey)
+      return "Click again to confirm local deletion"
+    if (!target.recurring) return "Delete event locally (click again to confirm)"
+    return scope === "series"
+      ? "Delete the whole recurring series locally (click again to confirm)"
+      : "Delete only this event locally (click again to confirm)"
   }
 
   function eventRepeatLabel() {
@@ -718,10 +748,10 @@ Panel {
     return bestKey
   }
 
-  // Fires a desktop notification for each timed event five minutes before
-  // its start and again at the start itself. Fired keys are remembered in
-  // the widget settings, so a shell restart inside the firing minute cannot
-  // double-notify, and missed windows (suspend, shell down) stay missed.
+  // Fires a desktop notification for timed events five minutes before their
+  // start and again at the start. Successful sends are remembered in widget
+  // settings; transient helper failures are retried while the reminder window
+  // remains open, without recording them as sent.
   function evaluateEventReminders() {
     if (!root.eventNotificationsEnabled) return
     if (root.calendarLoading || root.calendarError !== "" || root.calendarEvents.length === 0) return
@@ -772,8 +802,11 @@ Panel {
 
   function fireEventReminder(event, when, notified) {
     var notifyKey = root.eventKeyFor(event) + "|" + when
-    if (notified[notifyKey]) return false
-    notified[notifyKey] = new Date().toISOString()
+    if (notified[notifyKey] || root.reminderInFlightKey !== "") return false
+    root.reminderInFlightKey = notifyKey
+    var attempts = Object.assign({}, root.reminderAttempts || {})
+    attempts[notifyKey] = Number(attempts[notifyKey] || 0) + 1
+    root.reminderAttempts = attempts
 
     var title = String(event.title || "Untitled event")
     var timeLabel = root.eventTimeLabel(event)
@@ -919,19 +952,6 @@ Panel {
     calendarPushing = true
     calendarPushOutput = ""
     calendarSyncMessage = "Pushing local changes to Google…"
-    calendarPushProcess.command = [root.helperPath("calendar-push"), "--confirm"]
-    calendarPushProcess.running = true
-  }
-
-  function pushCreatedEventToGoogle() {
-    if (root.calendarRuntimeMissing) {
-      root.calendarSyncMessage = "Saved locally, but Caldir runtime is not installed"
-      calendarSyncFeedback.restart()
-      return
-    }
-    calendarPushing = true
-    calendarPushOutput = ""
-    calendarSyncMessage = "Event saved locally — syncing with Google…"
     calendarPushProcess.command = [root.helperPath("calendar-push"), "--confirm"]
     calendarPushProcess.running = true
   }
@@ -1174,7 +1194,9 @@ Panel {
       root.calendarCreating = false
       if (exitCode === 0) {
         root.editingEvent = false
-        root.pushCreatedEventToGoogle()
+        var output = String(root.calendarCreateOutput || "").trim()
+        root.calendarSyncMessage = output || "Saved locally"
+        calendarReloadAfterPull.restart()
       } else {
         root.calendarSyncMessage = root.calendarCreateOutput || "Could not save the local event"
       }
@@ -1193,16 +1215,22 @@ Panel {
     }
     onExited: function(exitCode) {
       root.calendarMutating = false
-      if (exitCode === 0) {
+      if (exitCode === 0 || exitCode === 2) {
         var action = root.calendarMutationAction
         var target = root.mutationTargetLabel()
         root.editingEvent = false
         root.selectedAgendaEvent = null
         root.calendarDeleteArmed = false
-        root.calendarSyncMessage = action === "delete"
-          ? "Deleted " + target + " locally"
-          : "Updated " + target + " locally"
-        calendarReloadAfterPull.restart()
+        root.calendarDeleteArmedTarget = ""
+        if (exitCode === 2) {
+          root.calendarSyncMessage = root.calendarMutationOutput
+            || "Local change committed, but the calendar cache refresh failed"
+        } else {
+          root.calendarSyncMessage = action === "delete"
+            ? "Deleted " + target + " locally"
+            : "Updated " + target + " locally"
+          calendarReloadAfterPull.restart()
+        }
       } else {
         root.calendarSyncMessage = root.calendarMutationOutput || "Could not change the local event"
       }
@@ -1259,6 +1287,7 @@ Panel {
     repeat: false
     onTriggered: {
       root.calendarDeleteArmed = false
+      root.calendarDeleteArmedTarget = ""
       if (!root.calendarMutating)
         root.calendarSyncMessage = "Deletion cancelled"
     }
@@ -1372,9 +1401,32 @@ Panel {
       waitForEnd: true
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0)
-        root.calendarSyncMessage = "Could not send the event notification"
+      var notifyKey = root.reminderInFlightKey
+      if (notifyKey === "") return
+      root.reminderInFlightKey = ""
+      var attempts = Object.assign({}, root.reminderAttempts || {})
+      if (exitCode === 0) {
+        var notified = root.parseNotifiedMap()
+        notified[notifyKey] = new Date().toISOString()
+        delete attempts[notifyKey]
+        root.reminderAttempts = attempts
+        root.persistSettings({ calendarNotified: JSON.stringify(notified) })
+        root.evaluateEventReminders()
+      } else if (Number(attempts[notifyKey] || 0) < 3) {
+        reminderRetryTimer.restart()
+      } else {
+        delete attempts[notifyKey]
+        root.reminderAttempts = attempts
+        root.calendarSyncMessage = "Could not send the event notification after 3 attempts"
+      }
     }
+  }
+
+  Timer {
+    id: reminderRetryTimer
+    interval: 1000
+    repeat: false
+    onTriggered: root.evaluateEventReminders()
   }
 
   component SettingsChoiceButton: Button {
@@ -2796,7 +2848,7 @@ Button {
                       fontSize: Style.font.caption
                       horizontalPadding: Style.space(6)
                       verticalPadding: Style.space(3)
-                      tooltipText: "Delete event immediately, then sync with Google"
+                      tooltipText: root.deleteTooltipText(modelData)
                       foreground: root.calendarDeleteArmed && root.selectedAgendaEvent === modelData
                         ? Color.urgent : root.contentForeground
                       fontFamily: root.contentFontFamily

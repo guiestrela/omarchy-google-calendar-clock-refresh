@@ -142,6 +142,100 @@ def atomic_write(path: Path, lines: list[str]) -> None:
             os.unlink(temporary)
 
 
+def atomic_write_batch(updates: list[tuple[Path, list[str] | None]]) -> None:
+    """Commit related calendar-file updates together, restoring prior files on failure."""
+    if not updates:
+        return
+
+    originals: dict[Path, tuple[bytes | None, int]] = {}
+    staged: dict[Path, str] = {}
+    committed: list[Path] = []
+
+    def snapshot(path: Path) -> tuple[bytes | None, int]:
+        flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
+        try:
+            descriptor = os.open(path, flags)
+        except FileNotFoundError:
+            return None, 0o600
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise OSError(errno.EINVAL, "not a regular calendar file", path)
+            if metadata.st_size > MAX_CALENDAR_BYTES:
+                raise OSError(errno.EFBIG, "calendar file exceeds size limit", path)
+            chunks: list[bytes] = []
+            remaining = MAX_CALENDAR_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+            if len(payload) > MAX_CALENDAR_BYTES:
+                raise OSError(errno.EFBIG, "calendar file exceeds size limit", path)
+            return payload, stat.S_IMODE(metadata.st_mode)
+        finally:
+            os.close(descriptor)
+
+    def stage_payload(path: Path, payload: bytes, mode: int) -> str:
+        descriptor, temporary = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary, mode)
+            return temporary
+        except BaseException:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+            raise
+
+    try:
+        seen: set[Path] = set()
+        for path, lines in updates:
+            if path in seen:
+                raise ValueError(f"duplicate calendar transaction target: {path.name}")
+            seen.add(path)
+            old_payload, old_mode = snapshot(path)
+            originals[path] = (old_payload, old_mode)
+            if lines is not None:
+                payload = ("\r\n".join(lines) + "\r\n").encode("utf-8")
+                mode = old_mode if old_payload is not None else 0o600
+                staged[path] = stage_payload(path, payload, mode)
+
+        for path, _lines in updates:
+            if path in staged:
+                os.replace(staged[path], path)
+                del staged[path]
+            else:
+                path.unlink(missing_ok=True)
+            committed.append(path)
+    except Exception as error:
+        rollback_errors: list[str] = []
+        for path in reversed(committed):
+            old_payload, old_mode = originals[path]
+            try:
+                if old_payload is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    temporary = stage_payload(path, old_payload, old_mode)
+                    try:
+                        os.replace(temporary, path)
+                    finally:
+                        if os.path.exists(temporary):
+                            os.unlink(temporary)
+            except Exception as rollback_error:
+                rollback_errors.append(f"{path.name}: {rollback_error}")
+        detail = "Calendar changes were rolled back" if not rollback_errors else "Calendar rollback was incomplete: " + "; ".join(rollback_errors)
+        raise CalendarError(f"Could not commit calendar changes ({detail}): {error}") from error
+    finally:
+        for temporary in staged.values():
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+
 def backup(path: Path, backup_root: Path) -> None:
     if not path.exists():
         return
@@ -175,6 +269,7 @@ def matching_files(calendar_path: Path, uid: str) -> list[tuple[Path, list[str]]
             continue
         if property_value(lines, "UID") == uid:
             matches.append((path, lines))
+    matches.sort(key=lambda item: item[0].name)
     return matches
 
 
@@ -388,7 +483,7 @@ def edit_series(master_path: Path, lines: list[str], matches: list[tuple[Path, l
             raise CalendarError("The recurrence schedule is invalid")
         set_property(lines, "RRULE", recurrence_rule)
     touch_revision(lines)
-    atomic_write(master_path, lines)
+    updates = [(master_path, lines)]
 
     if source_all_day != all_day or recurrence_clock:
         for override_path, override_lines in matches:
@@ -406,7 +501,9 @@ def edit_series(master_path: Path, lines: list[str], matches: list[tuple[Path, l
             backup(override_path, backup_root)
             set_property(override_lines, "RECURRENCE-ID", normalized, parameters)
             touch_revision(override_lines)
-            atomic_write(override_path, override_lines)
+            updates.append((override_path, override_lines))
+
+    atomic_write_batch(updates)
 
 
 def edit_instance(master: tuple[Path, list[str]], override, parameters: str, recurrence_value: str,
@@ -445,7 +542,6 @@ def delete_instance(master: tuple[Path, list[str]], override, parameters: str, r
     backup(master_path, backup_root)
     if override:
         backup(override[0], backup_root)
-        override[0].unlink()
     exdate_head = "EXDATE" + parameters
     duplicate = any(
         line.split(":", 1)[0].upper() == exdate_head.upper()
@@ -456,12 +552,18 @@ def delete_instance(master: tuple[Path, list[str]], override, parameters: str, r
         end = next((i for i, line in enumerate(lines) if line.upper() == "END:VEVENT"), len(lines))
         lines.insert(end, exdate_head + ":" + recurrence_value)
     touch_revision(lines)
-    atomic_write(master_path, lines)
+    updates: list[tuple[Path, list[str] | None]] = [(master_path, lines)]
+    if override:
+        updates.append((override[0], None))
+    atomic_write_batch(updates)
 
 
 def refresh_cache() -> None:
     updater = SCRIPT_DIR / "calendar-cache-update"
-    result = subprocess.run([str(updater)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        result = subprocess.run([str(updater)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as error:
+        raise CalendarError("Could not start the local calendar cache refresh") from error
     if result.returncode != 0:
         raise CalendarError(result.stderr.strip() or "The event changed, but the calendar cache could not refresh")
 
@@ -574,9 +676,11 @@ def main() -> None:
 
         if action == "delete":
             if scope == "series":
+                updates: list[tuple[Path, list[str] | None]] = []
                 for path, _lines in matches:
                     backup(path, backup_root)
-                    path.unlink()
+                    updates.append((path, None))
+                atomic_write_batch(updates)
             else:
                 delete_instance(master, override, parameters, recurrence_value, backup_root)
         else:
@@ -603,11 +707,17 @@ def main() -> None:
                               all_day, time_text, recurrence_tzid,
                               calendar_path, backup_root)
 
-        refresh_cache()
         recurring = property_line(master[1], "RRULE") is not None
         label = "the event" if not recurring else ("the whole series" if scope == "series" else "this event")
         verb = "Deleted" if action == "delete" else "Updated"
-        print(f"{verb} {label} locally")
+        success_message = f"{verb} {label} locally"
+        try:
+            refresh_cache()
+        except CalendarError as error:
+            print(success_message)
+            print(f"Local change committed, but calendar cache refresh failed: {error}", file=sys.stderr)
+            raise SystemExit(2)
+        print(success_message)
     except CalendarError as error:
         fail(str(error))
 

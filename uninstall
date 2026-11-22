@@ -3,9 +3,8 @@ set -euo pipefail
 umask 077
 
 # Removes Omarchy Google Calendar and Clock and everything its setup script
-# installed. Calendar data and OAuth credentials are never deleted without a
-# separate explicit confirmation. Pass --yes to skip the prompts after
-# reviewing this script yourself.
+# installed. OAuth credentials and calendar data require independent opt-in.
+# --yes skips only the primary uninstall prompt.
 
 PLUGIN_ID="io.github.guiestrela.omarchy-google-calendar-clock"
 BUILTIN_ID="omarchy.clock"
@@ -21,23 +20,30 @@ DEFAULT_CALENDAR_DIR="${DATA_HOME}/caldir"
 SHELL_CONFIG="${CONFIG_HOME}/omarchy/shell.json"
 
 ASSUME_YES=false
+DELETE_GOOGLE_CREDENTIALS=false
+DELETE_CALENDAR_DATA=false
 
 usage() {
   cat <<'EOF'
-Usage: ./uninstall [--yes]
+Usage: ./uninstall [--yes] [--delete-google-credentials] [--delete-calendar-data]
 
 Removes the plugin, its downloaded Caldir binaries, and its local event
-cache. Deleting Google OAuth credentials and Caldir calendar data always
-requires a separate confirmation.
+cache. --yes skips only the primary uninstall prompt. Deleting Google OAuth
+credentials and Caldir calendar data each requires its own explicit opt-in
+flag; the flags are independent.
 EOF
 }
 
-case "${1:-}" in
-  "") ;;
-  --yes|-y) ASSUME_YES=true ;;
-  -h|--help) usage; exit 0 ;;
-  *) usage >&2; exit 64 ;;
-esac
+while (($#)); do
+  case "$1" in
+    --yes|-y) ASSUME_YES=true ;;
+    --delete-google-credentials) DELETE_GOOGLE_CREDENTIALS=true ;;
+    --delete-calendar-data) DELETE_CALENDAR_DATA=true ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 64 ;;
+  esac
+  shift
+done
 
 for dependency in omarchy jq; do
   command -v "$dependency" >/dev/null || {
@@ -46,12 +52,11 @@ for dependency in omarchy jq; do
   }
 done
 
-confirm() {
+confirm_interactively() {
   local prompt="$1"
-  if $ASSUME_YES; then return 0; fi
   if ! [[ -t 0 && -t 1 ]]; then
-    echo "Refusing to continue without confirmation; pass --yes to skip prompts." >&2
-    exit 1
+    echo "Refusing to continue without confirmation; pass --yes to skip the uninstall prompt." >&2
+    return 2
   fi
   local answer
   while true; do
@@ -61,6 +66,21 @@ confirm() {
       ""|n|N|no|NO) return 1 ;;
     esac
   done
+}
+
+confirm_primary() {
+  if $ASSUME_YES; then return 0; fi
+  local status=0
+  confirm_interactively "$1" || status=$?
+  if (( status == 2 )); then exit 1; fi
+  return "$status"
+}
+
+confirm_optional() {
+  # Optional data is preserved in non-interactive runs unless its own opt-in
+  # flag was supplied; the global --yes flag never authorizes these deletions.
+  if ! [[ -t 0 && -t 1 ]]; then return 1; fi
+  confirm_interactively "$1"
 }
 
 restore_clock_center_anchor() {
@@ -88,7 +108,7 @@ restore_clock_center_anchor() {
 echo "This removes Omarchy Google Calendar and Clock and what its setup installed."
 echo "Caldir calendar files (.ics) and Google OAuth credentials are kept unless"
 echo "you confirm deleting them separately."
-confirm "Remove Omarchy Google Calendar and Clock now?" || {
+confirm_primary "Remove Omarchy Google Calendar and Clock now?" || {
   echo "Aborted; nothing was removed."
   exit 0
 }
@@ -113,7 +133,7 @@ if [[ -e "$CACHE_FILE" ]]; then
 fi
 
 if [[ -d "$GOOGLE_CONFIG_DIR" ]]; then
-  if confirm "Delete Google OAuth credentials in ${GOOGLE_CONFIG_DIR}?"; then
+  if $DELETE_GOOGLE_CREDENTIALS || confirm_optional "Delete Google OAuth credentials in ${GOOGLE_CONFIG_DIR}?"; then
     rm -rf -- "$GOOGLE_CONFIG_DIR"
     echo "Deleted Google OAuth credentials."
   else
@@ -133,7 +153,7 @@ fi
 
 if [[ -n "$calendar_dir" && -d "$calendar_dir" ]]; then
   echo "Caldir keeps your calendar files in ${calendar_dir}."
-  if confirm "Delete ALL local calendar data in ${calendar_dir}?"; then
+  if $DELETE_CALENDAR_DATA || confirm_optional "Delete ALL local calendar data in ${calendar_dir}?"; then
     rm -rf -- "$calendar_dir"
     echo "Deleted local calendar data."
   else
