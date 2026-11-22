@@ -76,9 +76,15 @@ exit 0
         (inject / "sitecustomize.py").write_text("""import os
 from pathlib import Path
 _real_replace = os.replace
+
 def _replace(src, dst, *args, **kwargs):
-    if os.environ.get('FIXTURE_FAIL_REPLACE') == Path(dst).name:
-        raise OSError('FIXTURE_INJECTED_REPLACE:' + Path(dst).name)
+    target = Path(dst).name
+    sequence = [name for name in os.environ.get('FIXTURE_FAIL_REPLACE_SEQUENCE', '').split(',') if name]
+    if sequence and target == sequence[0]:
+        os.environ['FIXTURE_FAIL_REPLACE_SEQUENCE'] = ','.join(sequence[1:])
+        raise OSError('FIXTURE_INJECTED_REPLACE_SEQUENCE:' + target)
+    if os.environ.get('FIXTURE_FAIL_REPLACE') == target:
+        raise OSError('FIXTURE_INJECTED_REPLACE:' + target)
     return _real_replace(src, dst, *args, **kwargs)
 os.replace = _replace
 _real_unlink = Path.unlink
@@ -102,10 +108,12 @@ Path.unlink = _unlink
             Path(env[key]).mkdir(parents=True, exist_ok=True)
         return mutate, master, override, env
 
-    def run_mutation(self, args, *, fail_replace=None, fail_unlink=None, cache_exit=None):
+    def run_mutation(self, args, *, fail_replace=None, fail_replace_sequence=None, fail_unlink=None, cache_exit=None):
         mutate, master, override, env = self.mutation_fixture()
         if fail_replace:
             env["FIXTURE_FAIL_REPLACE"] = fail_replace
+        if fail_replace_sequence:
+            env["FIXTURE_FAIL_REPLACE_SEQUENCE"] = ",".join(fail_replace_sequence)
         if fail_unlink:
             env["FIXTURE_FAIL_UNLINK"] = fail_unlink
         if cache_exit is not None:
@@ -170,6 +178,16 @@ Path.unlink = _unlink
         self.assertIn("SUMMARY:Original master", master.read_text())
         self.assertIn("RECURRENCE-ID;VALUE=DATE:20260102", override.read_text())
         self.assertIn("DTSTART;VALUE=DATE:20260101", master.read_text())
+
+    def test_incomplete_rollback_is_reported_when_restore_fails(self) -> None:
+        result, master, override = self.run_mutation(
+            ["edit", "series", "fixture", "fixture-series", "", "2026-01-01T09:30:00", "2026-01-01T10:30:00", "false", "Edited", "09:30", "keep", ""],
+            fail_replace_sequence=["override.ics", "master.ics"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("rollback was incomplete", result.stderr.lower())
+        self.assertIn("FIXTURE_INJECTED_REPLACE_SEQUENCE:master.ics", result.stderr)
+        self.assertIn("SUMMARY:Edited", master.read_text(), "report accurately when rollback cannot restore the master")
+        self.assertIn("SUMMARY:Original override", override.read_text())
 
     def test_instance_delete_rolls_back_master_when_override_unlink_fails(self) -> None:
         result, master, override = self.run_mutation(
