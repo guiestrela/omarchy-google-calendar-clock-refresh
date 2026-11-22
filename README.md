@@ -163,8 +163,9 @@ shell startup, and pulls every 30 minutes. The cache is stored at
 - moved the popup to match Omarchy's native top-bar calendar behavior;
 - added a sync icon and made the status action perform a Google pull;
 - added three-second sync feedback followed by automatic panel closing;
-- made event creation upload to Google automatically;
-- added one-click deletion for editable events;
+- kept local event creation local; Google uploads remain an explicit action that
+  can publish the pending change queue;
+- required a second click to confirm local event deletion;
 - added approximate new moon, first quarter, full moon, and last quarter
   events to the agenda;
 - kept lunar events read-only and preserved read-only Google calendars;
@@ -195,10 +196,12 @@ It removes the plugin, its downloaded Caldir runtime, and its event cache. It
 then restores the built-in `omarchy.clock` as the fixed center anchor of the
 bar.
 
-The uninstaller separately asks whether to delete Google OAuth credentials and
-local Caldir calendar data. Keeping them allows a later reinstall to reuse
-your calendar state. Pass `--yes` only after reviewing the script: it accepts
-all removal prompts.
+The uninstaller asks whether to delete Google OAuth credentials and local Caldir
+calendar data; keeping them allows a later reinstall to reuse the calendar
+state. `--yes` skips only the primary plugin/cache removal prompt. Optional data
+deletions require independent opt-ins: `--delete-google-credentials` and
+`--delete-calendar-data`. In non-interactive use without those flags, optional
+data is preserved.
 
 Using the removal hook in the Omarchy menu removes the plugin directory, but
 leaves the data mentioned above and does not restore the built-in clock.
